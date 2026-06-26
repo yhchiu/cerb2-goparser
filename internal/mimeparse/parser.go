@@ -23,7 +23,13 @@ type Parser struct {
 	lr        *lineReader
 	tmpDir    string
 	tmpPrefix string
+	// bodyTranscoder, when set, converts text/* part bodies from their declared
+	// charset to UTF-8 as they are extracted. nil leaves bodies untouched.
+	bodyTranscoder Transcoder
 }
+
+// SetBodyTranscoder enables converting text/* part bodies to UTF-8 using tr.
+func (p *Parser) SetBodyTranscoder(tr Transcoder) { p.bodyTranscoder = tr }
 
 // NewParser creates a parser reading the message from r. tmpPattern is the
 // cfile-style temp path (e.g. "/tmp/cerbmime_XXXXXX"); its directory and prefix

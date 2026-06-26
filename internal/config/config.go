@@ -48,6 +48,10 @@ type Config struct {
 	// Off by default to match the C (whose ICU conversion was disabled).
 	CharsetUTF8 bool
 
+	// CharsetUTF8Body enables converting text/* part bodies to UTF-8. Controlled
+	// separately from CharsetUTF8 and off by default.
+	CharsetUTF8Body bool
+
 	// debug flags
 	PrintXML   bool
 	PrintCurl  bool
@@ -144,6 +148,9 @@ func Load(r io.Reader, log *clog.Logger) (*Config, error) {
 	}
 	if v, ok := attr(root.Get("configuration", "global", "charset_utf8"), "value"); ok && v == "true" {
 		cfg.CharsetUTF8 = true
+	}
+	if v, ok := attr(root.Get("configuration", "global", "charset_utf8_body"), "value"); ok && v == "true" {
+		cfg.CharsetUTF8Body = true
 	}
 
 	// pop3 blocks (a host is required to register an account)

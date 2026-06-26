@@ -70,6 +70,7 @@ Other recognised elements (all optional):
 | `global/pop3_timeout@value` | per-read POP3 timeout (seconds) | 30 |
 | `global/libcurl@value` | accepted but ignored (Go uses `net/http`) | — |
 | `global/charset_utf8@value` | `true` converts RFC-2047 subjects to UTF-8 | false |
+| `global/charset_utf8_body@value` | `true` converts text/* part bodies to UTF-8 | false |
 | `debug/xml@value` | print the parsed XML | 0 |
 | `debug/curl@value` | print the server response | 0 |
 | `debug/parse@value` | parse only, don't post (prints XML if `debug/xml`) | 0 |
@@ -120,10 +121,12 @@ CDATA-wrapped, and indentation is two spaces per level — all matching
 
 - **No libcurl / dlopen.** The bundled `libcurl.so` machinery is replaced by
   `net/http`; a `global/libcurl` value is accepted but ignored.
-- **Charset transcoding is opt-in.** By default RFC-2047 subjects are
-  byte-decoded without charset conversion, matching the C (its ICU conversion was
-  commented out). Set `global/charset_utf8` to `true` to convert encoded-word
-  subjects to UTF-8 (via `golang.org/x/text`).
+- **Charset transcoding is opt-in.** By default subjects and bodies are decoded
+  without charset conversion, matching the C (its ICU conversion was commented
+  out). Set `global/charset_utf8` to `true` to convert RFC-2047 encoded-word
+  subjects to UTF-8, and `global/charset_utf8_body` to convert text/* part bodies
+  to UTF-8 (rewriting that part's `<charset>` to `utf-8` so the backend does not
+  convert again). Both use `golang.org/x/text` and are controlled independently.
 - **No `fork()`.** Messages are processed sequentially, like the C (whose fork
   loop waited for each child before fetching the next message). Each message is
   wrapped in a `recover()` so one malformed message cannot abort the batch.

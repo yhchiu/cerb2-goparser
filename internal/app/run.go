@@ -127,7 +127,11 @@ func processOne(cfg *config.Config, filename string, log *clog.Logger, stdout io
 		log.Log(clog.Error, "could not open %s: %v", filename, err)
 		return
 	}
-	email = mimeparse.NewParser(log, f, cfg.TmpMimePattern).FileParse()
+	parser := mimeparse.NewParser(log, f, cfg.TmpMimePattern)
+	if cfg.CharsetUTF8Body {
+		parser.SetBodyTranscoder(charset.ToUTF8Lossy)
+	}
+	email = parser.FileParse()
 	f.Close()
 
 	switch {

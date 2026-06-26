@@ -1,6 +1,9 @@
 package mimeparse
 
 import (
+	"os"
+	"strings"
+
 	"cerb2-goparser/internal/clog"
 	"cerb2-goparser/internal/xmltree"
 )
@@ -135,6 +138,52 @@ func (p *Parser) bodyParseDefault(sub *xmltree.Node) {
 		p.decodeText(pw, sub, boundary)
 	}
 	_ = pw.cur.Close()
+
+	p.maybeTranscodeBody(sub, filenode)
+}
+
+// maybeTranscodeBody converts a text/* part's extracted body files from their
+// declared charset to UTF-8 (when a body transcoder is configured) and rewrites
+// the part's <charset> to "utf-8" so the backend does not convert again. Only
+// text/plain, text/html and other text/* parts are touched; binary attachments
+// and nested messages are left as-is. Output files are split at line boundaries,
+// so transcoding each file independently is safe for multibyte charsets.
+func (p *Parser) maybeTranscodeBody(sub, filenode *xmltree.Node) {
+	if p.bodyTranscoder == nil || sub.Name == "" {
+		return
+	}
+	ct := sub.Get(sub.Name, "headers", "content-type")
+	if ct == nil {
+		return
+	}
+	if c, _ := ct.Attribute("case"); c != "b" && c != "c" && c != "d" {
+		return // only text/* parts
+	}
+	csNode := ct.Get("content-type", "charset")
+	if csNode == nil || len(csNode.Data) == 0 {
+		return
+	}
+	cs := string(csNode.Data)
+	switch {
+	case strings.EqualFold(cs, "utf-8"), strings.EqualFold(cs, "utf8"),
+		strings.EqualFold(cs, "us-ascii"), strings.EqualFold(cs, "ascii"):
+		return // already UTF-8 compatible
+	}
+
+	for _, tn := range filenode.Children() {
+		if tn.Name != "tempname" || len(tn.Data) == 0 {
+			continue
+		}
+		path := string(tn.Data)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if err := os.WriteFile(path, p.bodyTranscoder(cs, data), 0o644); err != nil {
+			p.logf(clog.Error, "cmime: could not rewrite %s as UTF-8: %v", path, err)
+		}
+	}
+	csNode.SetData([]byte("utf-8"))
 }
 
 // hasBoundaryPrefix reports whether line[2:] starts with boundary.

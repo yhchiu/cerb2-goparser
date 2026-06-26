@@ -113,6 +113,58 @@ func TestParseMultipartBase64(t *testing.T) {
 	}
 }
 
+// latin1ToUTF8 is a test transcoder mapping ISO-8859-1 bytes to UTF-8.
+func latin1ToUTF8(_ string, data []byte) []byte {
+	var out []byte
+	for _, b := range data {
+		out = append(out, []byte(string(rune(b)))...)
+	}
+	return out
+}
+
+func TestBodyTranscode(t *testing.T) {
+	raw := "Content-Type: text/plain; charset=\"iso-8859-1\"\r\n" +
+		"\r\n" +
+		"Caf\xe9\r\n" // 0xE9 = é in Latin-1
+
+	dir := t.TempDir()
+	p := NewParser(nil, strings.NewReader(raw), filepath.Join(dir, "cerbmime_XXXXXX"))
+	p.SetBodyTranscoder(latin1ToUTF8)
+	email := p.FileParse()
+	if email == nil {
+		t.Fatal("FileParse returned nil")
+	}
+
+	// the extracted body file is now UTF-8
+	got := readTemp(t, email.Get("email", "file", "tempname"))
+	if got != "Café\r\n" {
+		t.Errorf("transcoded body = %q, want %q", got, "Café\r\n")
+	}
+
+	// the charset node is rewritten so the backend won't convert again
+	cs := email.Get("email", "headers", "content-type", "charset")
+	if cs == nil || string(cs.Data) != "utf-8" {
+		t.Errorf("charset node = %v, want utf-8", cs)
+	}
+}
+
+func TestBodyTranscodeSkippedForBinary(t *testing.T) {
+	// octet-stream (case f) is not text/* -> body must NOT be transcoded.
+	raw := "Content-Type: application/octet-stream; charset=\"iso-8859-1\"\r\n" +
+		"\r\n" +
+		"Caf\xe9\r\n"
+
+	dir := t.TempDir()
+	p := NewParser(nil, strings.NewReader(raw), filepath.Join(dir, "cerbmime_XXXXXX"))
+	p.SetBodyTranscoder(latin1ToUTF8)
+	email := p.FileParse()
+
+	got := readTemp(t, email.Get("email", "file", "tempname"))
+	if got != "Caf\xe9\r\n" {
+		t.Errorf("binary body should be untouched, got %q", got)
+	}
+}
+
 func TestParseQuotedPrintable(t *testing.T) {
 	raw := "Content-Type: text/plain\r\n" +
 		"Content-Transfer-Encoding: quoted-printable\r\n" +

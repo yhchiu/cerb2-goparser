@@ -82,13 +82,19 @@ func TestLoad(t *testing.T) {
 }
 
 func TestLoadCharsetUTF8(t *testing.T) {
-	src := `<configuration><global><charset_utf8 value="true"/></global></configuration>`
+	src := `<configuration><global>
+		<charset_utf8 value="true"/>
+		<charset_utf8_body value="true"/>
+	</global></configuration>`
 	cfg, err := Load(strings.NewReader(src), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !cfg.CharsetUTF8 {
 		t.Error("CharsetUTF8 = false, want true")
+	}
+	if !cfg.CharsetUTF8Body {
+		t.Error("CharsetUTF8Body = false, want true")
 	}
 }
 
