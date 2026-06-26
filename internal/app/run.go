@@ -99,19 +99,35 @@ func processFiles(cfg *config.Config, files []string, log *clog.Logger, stdout i
 // processOne parses one message, optionally posts it, and cleans up temp files.
 // It returns true when the message was delivered (or simulated delivered in
 // debug-parse mode). Mirrors the body of cer_parse_files' loop.
+//
+// Each message is isolated with a recover: a panic while parsing or posting one
+// message is logged and treated as a failed delivery instead of aborting the
+// whole batch. This restores the crash isolation the C achieved by forking a
+// child process per message.
 func processOne(cfg *config.Config, filename string, log *clog.Logger, stdout io.Writer, poster Poster) (ok bool) {
+	var email *xmltree.Node
+	delivered := false
+	keyErr := false
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Log(clog.Fatal, "panic while processing %s: %v", filename, r)
+			delivered = false
+			keyErr = true
+		}
+		cleanup(cfg, filename, email, delivered, keyErr)
+		ok = delivered && !keyErr
+	}()
+
 	log.Log(clog.Debug, "cer_parse_files(): Processing %s", filename)
 
 	f, err := os.Open(filename)
 	if err != nil {
 		log.Log(clog.Error, "could not open %s: %v", filename, err)
-		return false
+		return
 	}
-	email := mimeparse.NewParser(log, f, cfg.TmpMimePattern).FileParse()
+	email = mimeparse.NewParser(log, f, cfg.TmpMimePattern).FileParse()
 	f.Close()
-
-	delivered := false
-	keyErr := false
 
 	switch {
 	case cfg.DebugParse:
@@ -143,9 +159,7 @@ func processOne(cfg *config.Config, filename string, log *clog.Logger, stdout io
 			delivered = d
 		}
 	}
-
-	cleanup(cfg, filename, email, delivered, keyErr)
-	return delivered && !keyErr
+	return
 }
 
 // cleanup removes the attachment temp files (already uploaded) and the saved

@@ -2,11 +2,41 @@ package app
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"cerb2-goparser/internal/clog"
+	"cerb2-goparser/internal/config"
+	"cerb2-goparser/internal/xmltree"
 )
+
+type panicPoster struct{}
+
+func (panicPoster) Deliver(*config.Config, *xmltree.Node, *clog.Logger) (bool, error) {
+	panic("boom")
+}
+
+func TestProcessOnePanicRecover(t *testing.T) {
+	dir := t.TempDir()
+	msg := filepath.Join(dir, "msg.eml")
+	if err := os.WriteFile(msg, []byte("Subject: Hi\r\nContent-Type: text/plain\r\n\r\nbody\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{TmpMimePattern: filepath.Join(dir, "cerbmime_XXXXXX")}
+
+	// A panic during delivery must be recovered (no crash) and reported as a
+	// failed delivery so the surrounding batch loop can continue.
+	ok := processOne(cfg, msg, nil, io.Discard, panicPoster{})
+	if ok {
+		t.Error("processOne = true, want false after a panic")
+	}
+	if _, err := os.Stat(msg); err != nil {
+		t.Errorf("message file should be kept after a failed delivery: %v", err)
+	}
+}
 
 func TestPipeDebugParse(t *testing.T) {
 	dir := t.TempDir()
