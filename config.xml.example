@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Example configuration for cerb2-goparser (Go port of cerb2-cparser).
+
+  Usage:
+    cerberus <this-file> <log_level> <log.txt>
+
+  log_level is matched by its FIRST letter (case-insensitive):
+    Mark, Fatal, Error, Warn, Debug, Trace
+
+  Delivery mode is chosen automatically:
+    * No <pop3> section   -> PIPE mode: one message is read from stdin.
+    * One or more <pop3>  -> POP3 mode: mail is fetched from each account.
+
+  Copy this file, edit the values for your site, and point the parser at the copy.
+-->
+<configuration>
+
+  <!-- ============================================================
+       WHERE TO POST PARSED MAIL  (choose ONE of A or B)
+       ============================================================ -->
+
+  <!-- A) Direct key (simplest): the parser URL and credentials live here.
+          This path is used whenever there is no <xsp> element below. -->
+  <key>
+    <parser
+      url="http://localhost/cerberus-gui/parser.php"
+      user="parser_login"
+      password="parser_password" />
+  </key>
+
+  <!-- B) xSP license key (alternative): an encrypted hex key is decrypted to
+          discover the xSP domain, the parser "boots" against it to obtain the
+          real parser URL and credentials, then posts there.
+          To use this, delete the <key> block above and uncomment the line below.
+            https     : "true" posts over https, otherwise http
+            user/pass : credentials sent with the boot request
+
+  <xsp https="true" user="parser_login" password="parser_password">PASTE_ENCRYPTED_HEX_KEY_HERE</xsp>
+  -->
+
+  <global>
+    <!-- Directory for temp files (the saved message and any decoded parts).
+         A trailing slash is added automatically if you forget one.
+           *nix : /tmp/
+           Win  : C:\temp\
+         If this element is omitted the current directory is used. -->
+    <tmp_dir value="/tmp/" />
+
+    <!-- Max messages pulled from each POP3 mailbox per run. Default 1024. -->
+    <!-- <max_pop3_messages value="100" /> -->
+
+    <!-- Delete policy after processing. Default "true".
+           "true"  : delete every message we can, including ones that failed.
+           "false" : keep failed messages on the server so you can spot
+                     problems, but you must clear them out by hand. -->
+    <!-- <max_pop3_delete value="true" /> -->
+
+    <!-- Seconds to wait for POP3 data before giving up on a message and moving
+         on. Default 30. Helps when a server does not end a message cleanly. -->
+    <!-- <pop3_timeout value="30" /> -->
+
+    <!-- Accepted for backward compatibility but IGNORED: the Go port uses
+         net/http instead of libcurl, so there is no library to load. -->
+    <!-- <libcurl value="./libcurl.so.3" /> -->
+
+    <!-- Convert RFC-2047 encoded-word Subjects to UTF-8. Default off.
+         Off matches the original C, whose charset conversion was disabled. -->
+    <!-- <charset_utf8 value="true" /> -->
+
+    <!-- Convert text/* part BODIES to UTF-8. Default off. Controlled
+         independently from charset_utf8. When on, the affected part's
+         <charset> is rewritten to "utf-8" so the backend does not convert it a
+         second time. Binary attachments are never touched. -->
+    <!-- <charset_utf8_body value="true" /> -->
+  </global>
+
+  <!-- ============================================================
+       DEBUGGING  (all values default to 0 / off)
+       ============================================================ -->
+  <debug>
+    <!-- Print the parsed XML to stdout. -->
+    <xml value="0" />
+    <!-- Print the server response to stdout. -->
+    <curl value="0" />
+    <!-- Parse only, do NOT post. With xml=1 this prints the XML and stops,
+         which is handy for inspecting how a message is parsed. -->
+    <parse value="0" />
+    <!-- Always delete temp files, even when delivery failed. -->
+    <superclean value="0" />
+  </debug>
+
+  <!-- ============================================================
+       HTTPS / TLS  (only needed when the parser URL uses https)
+       ============================================================
+       cainfo : path to a CA bundle file in PEM format
+       capath : directory of CA certificate files in PEM format
+       verify : 0 = do not verify the certificate (insecure)
+                1 = verify the certificate
+                2 = verify and require the host name to match
+                omit this section for the default (full verification)
+
+  <ssl>
+    <cainfo value="/path/to/curl-ca-bundle.crt" />
+    <capath value="/etc/ssl/certs" />
+    <verify value="2" />
+  </ssl>
+  -->
+
+  <!-- ============================================================
+       POP3 ACCOUNTS  (adding any <pop3> switches to POP3 mode)
+       ============================================================
+       Repeat the <pop3> block once per mailbox.
+         host     : required (a block with no host is skipped)
+         port     : defaults to 110
+         user     : required to log in (a block missing user/password is skipped)
+         password : required to log in
+         delete   : "false" leaves this account's mail on the server
+
+  <pop3>
+    <host value="mail.example.com" />
+    <port value="110" />
+    <user value="spam@example.com" />
+    <password value="secret" />
+    <delete value="true" />
+  </pop3>
+  -->
+
+</configuration>

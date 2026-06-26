@@ -34,7 +34,9 @@ Run the tests with `go test ./...`.
 
 ## Configuration
 
-The config is the same XML the C tool used. Two delivery setups are supported:
+See [`config.xml.example`](config.xml.example) for a fully commented template
+covering every option below. The config is the same XML the C tool used. Two
+delivery setups are supported:
 
 **Direct key** — the parser URL/credentials live in the config:
 

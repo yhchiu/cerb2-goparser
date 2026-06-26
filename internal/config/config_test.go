@@ -1,9 +1,35 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
+
+// TestExampleConfigLoads ensures the documented config.xml.example at the repo
+// root stays valid XML and loads with the expected defaults.
+func TestExampleConfigLoads(t *testing.T) {
+	f, err := os.Open("../../config.xml.example")
+	if err != nil {
+		t.Fatalf("open example: %v", err)
+	}
+	defer f.Close()
+
+	cfg, err := Load(f, nil)
+	if err != nil {
+		t.Fatalf("Load example: %v", err)
+	}
+	if cfg.TmpMimePattern != "/tmp/cerbmime_XXXXXX" {
+		t.Errorf("TmpMimePattern = %q, want /tmp/cerbmime_XXXXXX", cfg.TmpMimePattern)
+	}
+	if len(cfg.POP3) != 0 {
+		t.Errorf("example should have no active POP3 accounts, got %d", len(cfg.POP3))
+	}
+	// commented-out options leave defaults in place
+	if cfg.POP3Max != 1024 || cfg.Verify != -1 || cfg.CharsetUTF8 || cfg.CharsetUTF8Body {
+		t.Errorf("unexpected defaults: %+v", cfg)
+	}
+}
 
 func TestLoad(t *testing.T) {
 	src := `<configuration>
