@@ -23,6 +23,31 @@ func TestParseSubject(t *testing.T) {
 	}
 }
 
+func TestParseSubjectTranscode(t *testing.T) {
+	// =?iso-8859-1?Q?Caf=E9?=  -> 0xE9 is 'é' in Latin-1.
+	subject := []byte("=?iso-8859-1?Q?Caf=E9?=")
+
+	// Without a transcoder the raw decoded byte (0xE9) is emitted (C-faithful).
+	if got := ParseSubject(subject); string(got) != "Caf\xe9" {
+		t.Errorf("ParseSubject = %q, want Caf\\xe9", got)
+	}
+
+	// A Latin-1 -> UTF-8 transcoder converts the encoded-word.
+	latin1 := func(cs string, data []byte) []byte {
+		if cs != "iso-8859-1" {
+			return data
+		}
+		var out []byte
+		for _, b := range data {
+			out = append(out, []byte(string(rune(b)))...)
+		}
+		return out
+	}
+	if got := ParseSubjectTranscode(subject, latin1); string(got) != "Café" {
+		t.Errorf("ParseSubjectTranscode = %q, want Café", got)
+	}
+}
+
 func TestUUDecodeLine(t *testing.T) {
 	// "#0V%T" is the uuencoding of "Cat" (length char '#'=3, data "0V%T").
 	out, stop := uuDecodeLine([]byte("#0V%T\r\n"))

@@ -11,16 +11,33 @@ const (
 	subjEnding
 )
 
+// Transcoder converts data in the named charset to UTF-8. Implementations
+// should return the input unchanged when the charset is unknown or conversion
+// fails.
+type Transcoder func(charset string, data []byte) []byte
+
 // ParseSubject decodes RFC-2047 encoded-words ("=?charset?Q|B?text?=") in a
-// subject value, concatenating adjacent words. It mirrors cmime_parse_subject:
-// the ICU charset transcoding is disabled in the C source, so decoded bytes are
-// emitted as-is with no charset conversion.
+// subject value, concatenating adjacent words. It mirrors cmime_parse_subject
+// with the ICU charset transcoding disabled (as in the C source): decoded bytes
+// are emitted as-is with no charset conversion.
 func ParseSubject(subject []byte) []byte {
+	return parseSubject(subject, nil)
+}
+
+// ParseSubjectTranscode is ParseSubject but converts each encoded-word from its
+// declared charset to UTF-8 using tr. This re-enables the conversion the C left
+// commented out.
+func ParseSubjectTranscode(subject []byte, tr Transcoder) []byte {
+	return parseSubject(subject, tr)
+}
+
+func parseSubject(subject []byte, tr Transcoder) []byte {
 	if subject == nil {
 		return nil
 	}
 	final := make([]byte, 0, len(subject))
 	var encoded []byte
+	var charset string
 	state := subjDefault
 	s := subject
 	n := len(s)
@@ -35,7 +52,7 @@ func ParseSubject(subject []byte) []byte {
 				state = subjDefault
 				break
 			}
-			// charset = s[i:q] (ignored: transcoding disabled)
+			charset = string(s[i:q])
 			encoded = encoded[:0]
 			i = q + 1 // at the Q/B byte
 			if i < n && (s[i] == 'q' || s[i] == 'Q') {
@@ -82,7 +99,11 @@ func ParseSubject(subject []byte) []byte {
 			if i+1 < n && s[i] == '?' && s[i+1] == '=' {
 				i += 2
 			}
-			final = append(final, encoded...)
+			out := encoded
+			if tr != nil && charset != "" {
+				out = tr(charset, encoded)
+			}
+			final = append(final, out...)
 			state = subjDefault
 
 		default: // subjDefault

@@ -44,6 +44,10 @@ type Config struct {
 
 	LibCurl string // accepted for compatibility, unused (Go uses net/http)
 
+	// CharsetUTF8 enables converting RFC-2047 encoded-word subjects to UTF-8.
+	// Off by default to match the C (whose ICU conversion was disabled).
+	CharsetUTF8 bool
+
 	// debug flags
 	PrintXML   bool
 	PrintCurl  bool
@@ -137,6 +141,9 @@ func Load(r io.Reader, log *clog.Logger) (*Config, error) {
 	}
 	if v, ok := attr(root.Get("configuration", "global", "libcurl"), "value"); ok && len(v) > 7 {
 		cfg.LibCurl = v
+	}
+	if v, ok := attr(root.Get("configuration", "global", "charset_utf8"), "value"); ok && v == "true" {
+		cfg.CharsetUTF8 = true
 	}
 
 	// pop3 blocks (a host is required to register an account)

@@ -65,6 +65,9 @@ func TestLoad(t *testing.T) {
 	if !cfg.DebugParse || !cfg.PrintXML {
 		t.Errorf("debug flags: parse=%v xml=%v", cfg.DebugParse, cfg.PrintXML)
 	}
+	if cfg.CharsetUTF8 {
+		t.Error("CharsetUTF8 should default to false when unset")
+	}
 	if len(cfg.POP3) != 2 {
 		t.Fatalf("POP3 accounts = %d, want 2", len(cfg.POP3))
 	}
@@ -75,6 +78,17 @@ func TestLoad(t *testing.T) {
 	b := cfg.POP3[1]
 	if b.Host != "mail2.example.com" || b.Port != 110 || !b.Delete {
 		t.Errorf("pop3[1] defaults = %+v", b)
+	}
+}
+
+func TestLoadCharsetUTF8(t *testing.T) {
+	src := `<configuration><global><charset_utf8 value="true"/></global></configuration>`
+	cfg, err := Load(strings.NewReader(src), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CharsetUTF8 {
+		t.Error("CharsetUTF8 = false, want true")
 	}
 }
 

@@ -6,11 +6,12 @@ structure (decoding base64 / quoted-printable / uuencode / TNEF and RFC-2047
 subjects), builds an XML description of the message plus its extracted
 attachments, and HTTP-multipart-POSTs that to a Cerberus parser endpoint.
 
-The port is **idiomatic Go using only the standard library** (no third-party
-dependencies), but it is **wire-compatible** with the original: the serialized
-XML matches the C `cxml_node_tostring` output byte-for-byte and the multipart
-POST uses the same form fields and file parts, so it is a drop-in replacement for
-the existing Cerberus backend.
+The port is **idiomatic Go using the standard library** (the only third-party
+dependency is `golang.org/x/text`, used solely for optional charset conversion),
+but it is **wire-compatible** with the original: the serialized XML matches the C
+`cxml_node_tostring` output byte-for-byte and the multipart POST uses the same
+form fields and file parts, so it is a drop-in replacement for the existing
+Cerberus backend.
 
 ## Build & run
 
@@ -68,6 +69,7 @@ Other recognised elements (all optional):
 | `global/max_pop3_delete@value` | `false` keeps failed messages on the server | true |
 | `global/pop3_timeout@value` | per-read POP3 timeout (seconds) | 30 |
 | `global/libcurl@value` | accepted but ignored (Go uses `net/http`) | — |
+| `global/charset_utf8@value` | `true` converts RFC-2047 subjects to UTF-8 | false |
 | `debug/xml@value` | print the parsed XML | 0 |
 | `debug/curl@value` | print the server response | 0 |
 | `debug/parse@value` | parse only, don't post (prints XML if `debug/xml`) | 0 |
@@ -118,10 +120,13 @@ CDATA-wrapped, and indentation is two spaces per level — all matching
 
 - **No libcurl / dlopen.** The bundled `libcurl.so` machinery is replaced by
   `net/http`; a `global/libcurl` value is accepted but ignored.
-- **Charset transcoding is off.** RFC-2047 subjects are byte-decoded without
-  charset conversion, matching the C (its ICU conversion was commented out).
-- **No `fork()`.** Messages are processed sequentially (the C forked on Unix and
-  ran straight through on Windows).
+- **Charset transcoding is opt-in.** By default RFC-2047 subjects are
+  byte-decoded without charset conversion, matching the C (its ICU conversion was
+  commented out). Set `global/charset_utf8` to `true` to convert encoded-word
+  subjects to UTF-8 (via `golang.org/x/text`).
+- **No `fork()`.** Messages are processed sequentially, like the C (whose fork
+  loop waited for each child before fetching the next message). Each message is
+  wrapped in a `recover()` so one malformed message cannot abort the batch.
 - Debug-only `printf` noise and a config/comment discrepancy in the original
   C (`<key>` vs `<xsp>`) are not reproduced; both config shapes above work.
 - Temp files for extracted parts are cleaned up after posting (the C left some

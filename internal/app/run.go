@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"cerb2-goparser/internal/charset"
 	"cerb2-goparser/internal/clog"
 	"cerb2-goparser/internal/config"
 	"cerb2-goparser/internal/mimeparse"
@@ -145,9 +146,14 @@ func processOne(cfg *config.Config, filename string, log *clog.Logger, stdout io
 			e.AddChild("parser_version").AddDataString("2.x build " + mimeparse.BuildNumber)
 			e.AddChild("cerbmail").AddDataString(filename)
 		}
-		// decode any RFC-2047 encoded subject in place
+		// decode any RFC-2047 encoded subject in place, optionally converting it
+		// to UTF-8 when charset_utf8 is enabled
 		if subj := email.Get("email", "headers", "subject"); subj != nil {
-			subj.SetData(mimeparse.ParseSubject(subj.Data))
+			if cfg.CharsetUTF8 {
+				subj.SetData(mimeparse.ParseSubjectTranscode(subj.Data, charset.ToUTF8Lossy))
+			} else {
+				subj.SetData(mimeparse.ParseSubject(subj.Data))
+			}
 		}
 
 		if poster == nil {
