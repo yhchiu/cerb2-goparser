@@ -22,8 +22,8 @@ func TestExampleConfigLoads(t *testing.T) {
 	if cfg.TmpMimePattern != "/tmp/cerbmime_XXXXXX" {
 		t.Errorf("TmpMimePattern = %q, want /tmp/cerbmime_XXXXXX", cfg.TmpMimePattern)
 	}
-	if len(cfg.POP3) != 0 {
-		t.Errorf("example should have no active POP3 accounts, got %d", len(cfg.POP3))
+	if len(cfg.POP3) != 0 || len(cfg.IMAP) != 0 {
+		t.Errorf("example should have no active mailboxes, got pop3=%d imap=%d", len(cfg.POP3), len(cfg.IMAP))
 	}
 	// commented-out options leave defaults in place
 	if cfg.POP3Max != 1024 || cfg.Verify != -1 || cfg.CharsetUTF8 || cfg.CharsetUTF8Body {
@@ -121,6 +121,47 @@ func TestLoadCharsetUTF8(t *testing.T) {
 	}
 	if !cfg.CharsetUTF8Body {
 		t.Error("CharsetUTF8Body = false, want true")
+	}
+}
+
+func TestLoadIMAP(t *testing.T) {
+	src := `<configuration>
+		<imap>
+			<host value="imap.example.com" />
+			<tls value="true" />
+			<user value="bob" />
+			<password value="secret" />
+			<mailbox value="Archive" />
+			<delete value="false" />
+		</imap>
+		<imap>
+			<host value="imap2.example.com" />
+		</imap>
+	</configuration>`
+	cfg, err := Load(strings.NewReader(src), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.IMAP) != 2 {
+		t.Fatalf("IMAP accounts = %d, want 2", len(cfg.IMAP))
+	}
+	a := cfg.IMAP[0]
+	if a.Host != "imap.example.com" || !a.TLS || a.Port != 993 || a.User != "bob" ||
+		a.Pass != "secret" || a.Mailbox != "Archive" || a.Delete {
+		t.Errorf("imap[0] = %+v", a)
+	}
+	b := cfg.IMAP[1]
+	if b.Host != "imap2.example.com" || b.TLS || b.Port != 143 || b.Mailbox != "INBOX" || !b.Delete {
+		t.Errorf("imap[1] defaults = %+v", b)
+	}
+}
+
+func TestTLSConfig(t *testing.T) {
+	if tc := TLSConfig(&Config{Verify: 0}); !tc.InsecureSkipVerify {
+		t.Error("verify=0 should set InsecureSkipVerify")
+	}
+	if tc := TLSConfig(&Config{Verify: 2}); tc.InsecureSkipVerify {
+		t.Error("verify=2 should not skip verification")
 	}
 }
 

@@ -3,9 +3,12 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"cerb2-goparser/internal/clog"
 	"cerb2-goparser/internal/xmltree"
@@ -18,6 +21,17 @@ type POP3Account struct {
 	User   string
 	Pass   string
 	Delete bool
+}
+
+// IMAPAccount is one <imap> mailbox to fetch from.
+type IMAPAccount struct {
+	Host    string
+	Port    int
+	User    string
+	Pass    string
+	Delete  bool
+	TLS     bool   // implicit TLS (e.g. port 993)
+	Mailbox string // defaults to INBOX
 }
 
 // Config holds the parsed configuration. Zero-value defaults are set by Load.
@@ -59,10 +73,46 @@ type Config struct {
 	DebugParse bool
 
 	POP3 []POP3Account
+	IMAP []IMAPAccount
 
 	// Root is the parsed <configuration> element, retained so the poster can
 	// read a direct <key><parser> when no xSP key is configured.
 	Root *xmltree.Node
+}
+
+// TLSConfig builds a *tls.Config from the ssl settings: verify 0 disables
+// certificate verification, and cainfo/capath add trusted roots. Shared by the
+// HTTP poster and the IMAP client.
+func TLSConfig(cfg *Config) *tls.Config {
+	t := &tls.Config{}
+	if cfg.Verify == 0 {
+		t.InsecureSkipVerify = true
+	}
+	if cfg.CAInfo != "" || cfg.CAPath != "" {
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if cfg.CAInfo != "" {
+			if pem, err := os.ReadFile(cfg.CAInfo); err == nil {
+				pool.AppendCertsFromPEM(pem)
+			}
+		}
+		if cfg.CAPath != "" {
+			if entries, err := os.ReadDir(cfg.CAPath); err == nil {
+				for _, e := range entries {
+					if e.IsDir() {
+						continue
+					}
+					if pem, err := os.ReadFile(filepath.Join(cfg.CAPath, e.Name())); err == nil {
+						pool.AppendCertsFromPEM(pem)
+					}
+				}
+			}
+		}
+		t.RootCAs = pool
+	}
+	return t
 }
 
 // Load parses the configuration XML from r.
@@ -178,6 +228,43 @@ func Load(r io.Reader, log *clog.Logger) (*Config, error) {
 			acct.Delete = false
 		}
 		cfg.POP3 = append(cfg.POP3, acct)
+	}
+
+	// imap blocks
+	root.Iterate()
+	for {
+		n := root.Next("imap")
+		if n == nil {
+			break
+		}
+		host, ok := attr(n.Get("imap", "host"), "value")
+		if !ok {
+			continue
+		}
+		acct := IMAPAccount{Host: host, Delete: true, Mailbox: "INBOX"}
+		if v, ok := attr(n.Get("imap", "tls"), "value"); ok && v == "true" {
+			acct.TLS = true
+		}
+		if v, ok := attr(n.Get("imap", "port"), "value"); ok {
+			acct.Port = atoi(v)
+		} else if acct.TLS {
+			acct.Port = 993
+		} else {
+			acct.Port = 143
+		}
+		if v, ok := attr(n.Get("imap", "user"), "value"); ok {
+			acct.User = v
+		}
+		if v, ok := attr(n.Get("imap", "password"), "value"); ok {
+			acct.Pass = v
+		}
+		if v, ok := attr(n.Get("imap", "delete"), "value"); ok && v == "false" {
+			acct.Delete = false
+		}
+		if v, ok := attr(n.Get("imap", "mailbox"), "value"); ok && v != "" {
+			acct.Mailbox = v
+		}
+		cfg.IMAP = append(cfg.IMAP, acct)
 	}
 
 	return cfg, nil

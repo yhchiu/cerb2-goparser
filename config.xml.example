@@ -9,8 +9,10 @@
     Mark, Fatal, Error, Warn, Debug, Trace
 
   Delivery mode is chosen automatically:
-    * No <pop3> section   -> PIPE mode: one message is read from stdin.
-    * One or more <pop3>  -> POP3 mode: mail is fetched from each account.
+    * No <pop3> and no <imap>  -> PIPE mode: one message is read from stdin.
+    * <pop3> blocks            -> POP3 mode: mail is fetched from each account.
+    * <imap> blocks            -> IMAP mode: mail is fetched from each account.
+    (POP3 and IMAP may both be present; they run one after another.)
 
   Copy this file, edit the values for your site, and point the parser at the copy.
 -->
@@ -47,7 +49,8 @@
          If this element is omitted the current directory is used. -->
     <tmp_dir value="/tmp/" />
 
-    <!-- Max messages pulled from each POP3 mailbox per run. Default 1024. -->
+    <!-- Max messages pulled from each mailbox (POP3 or IMAP) per run.
+         Default 1024. -->
     <!-- <max_pop3_messages value="100" /> -->
 
     <!-- Delete policy after processing. Default "true".
@@ -124,6 +127,30 @@
     <password value="secret" />
     <delete value="true" />
   </pop3>
+  -->
+
+  <!-- ============================================================
+       IMAP ACCOUNTS  (adding any <imap> switches on IMAP mode)
+       ============================================================
+       Repeat the <imap> block once per mailbox.
+         host     : required (a block with no host is skipped)
+         tls      : "true" uses implicit TLS (recommended, e.g. port 993)
+         port     : defaults to 993 when tls is "true", otherwise 143
+         user     : required to log in
+         password : required to log in
+         mailbox  : defaults to INBOX
+         delete   : "false" leaves this account's mail on the server.
+                    Processed messages are marked \Deleted and expunged.
+
+  <imap>
+    <host value="imap.example.com" />
+    <tls value="true" />
+    <port value="993" />
+    <user value="spam@example.com" />
+    <password value="secret" />
+    <mailbox value="INBOX" />
+    <delete value="true" />
+  </imap>
   -->
 
 </configuration>

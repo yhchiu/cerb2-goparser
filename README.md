@@ -22,9 +22,9 @@ go build -o cerberus ./cmd/cerberus
 
 - `log_level` is matched by its first letter (case-insensitive): `Mark`, `Fatal`,
   `Error`, `Warn`, `Debug`, `Trace`.
-- With a `<pop3>` section in the config the parser runs in **POP3 mode** and
-  fetches mail from each account. Otherwise it runs in **pipe mode** and reads
-  one message from stdin:
+- With a `<pop3>` and/or `<imap>` section in the config the parser runs in
+  **POP3 / IMAP mode** and fetches mail from each account. Otherwise it runs in
+  **pipe mode** and reads one message from stdin:
 
 ```sh
 cat message.eml | ./cerberus config.xml DEBUG log.txt
@@ -81,6 +81,7 @@ Other recognised elements (all optional):
 | `ssl/capath@value` | CA directory for HTTPS | — |
 | `ssl/verify@value` | 0 = no verify, 1/2 = verify | full verify |
 | `pop3` (repeatable) | mailbox: `host`/`port`(110)/`user`/`password`/`delete` | — |
+| `imap` (repeatable) | mailbox: `host`/`port`(993 if `tls`, else 143)/`user`/`password`/`tls`/`mailbox`(INBOX)/`delete` | — |
 
 ## Architecture
 
@@ -94,6 +95,7 @@ only the application-specific logic is ported.
 | `cxml` | `internal/xmltree` (custom DOM + wire-exact serializer) |
 | `cmime` | `internal/mimeparse` (the core parser) |
 | `cpop3` | `internal/pop3` |
+| (new) IMAP support | `internal/imap` (RFC 3501, optional implicit TLS) |
 | `ccrypt/rsa` + `cer_key_info` | `internal/crypt` (Blowfish + key decode) |
 | `cer_curl_*`, `cer_add_sub_files` | `internal/poster` (`net/http` + `mime/multipart`) |
 | `cer_load_config` | `internal/config` |
@@ -136,3 +138,6 @@ CDATA-wrapped, and indentation is two spaces per level — all matching
   C (`<key>` vs `<xsp>`) are not reproduced; both config shapes above work.
 - Temp files for extracted parts are cleaned up after posting (the C left some
   behind).
+- **IMAP is a new addition** (the C only spoke POP3). Add `<imap>` blocks
+  (optional implicit TLS); processed messages are marked `\Deleted` and expunged.
+  The `max_pop3_messages` and `pop3_timeout` settings apply to IMAP as well.

@@ -6,8 +6,6 @@ package poster
 
 import (
 	"bytes"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -29,36 +27,8 @@ type HTTPPoster struct {
 // New builds an HTTPPoster whose TLS verification matches the config's ssl
 // settings (verify 0 disables verification; cainfo/capath add trusted roots).
 func New(cfg *config.Config) *HTTPPoster {
-	tlsCfg := &tls.Config{}
-	if cfg.Verify == 0 {
-		tlsCfg.InsecureSkipVerify = true
-	}
-	if cfg.CAInfo != "" || cfg.CAPath != "" {
-		pool, err := x509.SystemCertPool()
-		if err != nil || pool == nil {
-			pool = x509.NewCertPool()
-		}
-		if cfg.CAInfo != "" {
-			if pem, err := os.ReadFile(cfg.CAInfo); err == nil {
-				pool.AppendCertsFromPEM(pem)
-			}
-		}
-		if cfg.CAPath != "" {
-			if entries, err := os.ReadDir(cfg.CAPath); err == nil {
-				for _, e := range entries {
-					if e.IsDir() {
-						continue
-					}
-					if pem, err := os.ReadFile(filepath.Join(cfg.CAPath, e.Name())); err == nil {
-						pool.AppendCertsFromPEM(pem)
-					}
-				}
-			}
-		}
-		tlsCfg.RootCAs = pool
-	}
 	return &HTTPPoster{
-		client: &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}},
+		client: &http.Client{Transport: &http.Transport{TLSClientConfig: config.TLSConfig(cfg)}},
 	}
 }
 

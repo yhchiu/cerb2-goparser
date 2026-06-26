@@ -68,9 +68,19 @@ func run(args []string, stdin io.Reader, stdout io.Writer, override Poster) int 
 	}
 
 	exit := ExitOK
-	if len(cfg.POP3) > 0 {
-		exit = runPOP3(cfg, log, p)
-	} else {
+	switch {
+	case len(cfg.POP3) > 0 || len(cfg.IMAP) > 0:
+		if len(cfg.POP3) > 0 {
+			if e := runPOP3(cfg, log, p); e != ExitOK {
+				exit = e
+			}
+		}
+		if len(cfg.IMAP) > 0 {
+			if e := runIMAP(cfg, log, p); e != ExitOK {
+				exit = e
+			}
+		}
+	default:
 		log.Log(clog.Mark, "Parser is in PIPE mode, waiting for input")
 		path, err := saveInput(stdin, cfg.TmpMailPattern)
 		if err != nil {
