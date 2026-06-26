@@ -1,0 +1,15 @@
+# build output
+/cerberus
+/cerberus.exe
+/build/
+
+# scratch / e2e artifacts
+/.e2e/
+*.log
+
+# go
+*.test
+*.out
+
+# upstream C source kept as a local reference (has its own git repo)
+/cerb2-cparser/
