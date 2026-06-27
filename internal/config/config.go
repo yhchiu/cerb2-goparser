@@ -77,6 +77,10 @@ type Config struct {
 	POP3 []POP3Account
 	IMAP []IMAPAccount
 
+	// IMAPStateFile, when set, enables cross-session dedup: the UIDs already
+	// processed per mailbox are stored here so they are not fetched again.
+	IMAPStateFile string
+
 	// Root is the parsed <configuration> element, retained so the poster can
 	// read a direct <key><parser> when no xSP key is configured.
 	Root *xmltree.Node
@@ -203,6 +207,9 @@ func Load(r io.Reader, log *clog.Logger) (*Config, error) {
 	}
 	if v, ok := attr(root.Get("configuration", "global", "charset_utf8_body"), "value"); ok && v == "true" {
 		cfg.CharsetUTF8Body = true
+	}
+	if v, ok := attr(root.Get("configuration", "global", "imap_state"), "value"); ok {
+		cfg.IMAPStateFile = v
 	}
 
 	// pop3 blocks (a host is required to register an account)

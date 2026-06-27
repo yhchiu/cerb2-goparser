@@ -159,6 +159,17 @@ func TestLoadIMAP(t *testing.T) {
 	}
 }
 
+func TestLoadIMAPState(t *testing.T) {
+	src := `<configuration><global><imap_state value="/var/lib/cerberus/imap.json"/></global></configuration>`
+	cfg, err := Load(strings.NewReader(src), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IMAPStateFile != "/var/lib/cerberus/imap.json" {
+		t.Errorf("IMAPStateFile = %q", cfg.IMAPStateFile)
+	}
+}
+
 func TestTLSConfig(t *testing.T) {
 	if tc := TLSConfig(&Config{Verify: 0}); !tc.InsecureSkipVerify {
 		t.Error("verify=0 should set InsecureSkipVerify")

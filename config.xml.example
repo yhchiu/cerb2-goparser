@@ -76,6 +76,14 @@
          <charset> is rewritten to "utf-8" so the backend does not convert it a
          second time. Binary attachments are never touched. -->
     <!-- <charset_utf8_body value="true" /> -->
+
+    <!-- IMAP cross-session de-duplication. When set to a writable file path,
+         the parser remembers which message UIDs it has already processed per
+         mailbox (keyed by the mailbox UIDVALIDITY) and skips them on later
+         runs. Most useful with IMAP <delete value="false"/>. If the server's
+         UIDVALIDITY changes, the stored UIDs are discarded and messages are
+         reprocessed. Off (no state kept) when this is omitted. -->
+    <!-- <imap_state value="/var/lib/cerberus/imap-state.json" /> -->
   </global>
 
   <!-- ============================================================

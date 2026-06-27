@@ -73,6 +73,7 @@ Other recognised elements (all optional):
 | `global/libcurl@value` | accepted but ignored (Go uses `net/http`) | — |
 | `global/charset_utf8@value` | `true` converts RFC-2047 subjects to UTF-8 | false |
 | `global/charset_utf8_body@value` | `true` converts text/* part bodies to UTF-8 | false |
+| `global/imap_state@value` | path of the IMAP dedup state file (enables cross-session dedup) | — (off) |
 | `debug/xml@value` | print the parsed XML | 0 |
 | `debug/curl@value` | print the server response | 0 |
 | `debug/parse@value` | parse only, don't post (prints XML if `debug/xml`) | 0 |
@@ -142,7 +143,10 @@ CDATA-wrapped, and indentation is two spaces per level — all matching
   implicit TLS (`tls`) or `starttls`, a `search` criteria (IMAP `UID SEARCH`,
   default `ALL`), and a `mailbox` (default `INBOX`). Messages are fetched and
   marked `\Deleted` by UID, then expunged. The `max_pop3_messages` and
-  `pop3_timeout` settings apply to IMAP as well. The `internal/imap` package is a
+  `pop3_timeout` settings apply to IMAP as well. Set `global/imap_state` to a
+  file path to enable **cross-session de-duplication**: processed UIDs are
+  remembered per mailbox (keyed by `UIDVALIDITY`) and skipped on later runs, most
+  useful with `<delete value="false"/>`. The `internal/imap` package is a
   hand-rolled client kept behind a small interface, so it can be swapped for a
   full library (e.g. `emersion/go-imap`) later — for OAuth2/SASL or richer
   features — without touching the app.

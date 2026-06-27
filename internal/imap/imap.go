@@ -178,32 +178,64 @@ func (c *Client) Select(mailbox, criteria string) (int, error) {
 		}
 	}
 
-	untagged, err := c.cmd("UID SEARCH %s", criteria)
+	uids, err := c.uidSearch(criteria)
 	if err != nil {
 		return 0, err
 	}
+	c.uids = uids
+	return len(c.uids), nil
+}
+
+// uidSearch runs UID SEARCH with the given criteria and returns the matching
+// UIDs.
+func (c *Client) uidSearch(criteria string) ([]int, error) {
+	untagged, err := c.cmd("UID SEARCH %s", criteria)
+	if err != nil {
+		return nil, err
+	}
+	var uids []int
 	for _, line := range untagged {
 		f := strings.Fields(strings.TrimSpace(line))
 		if len(f) >= 2 && f[0] == "*" && strings.EqualFold(f[1], "SEARCH") {
 			for _, num := range f[2:] {
 				if v, err := strconv.Atoi(num); err == nil {
-					c.uids = append(c.uids, v)
+					uids = append(uids, v)
 				}
 			}
 		}
 	}
-	return len(c.uids), nil
+	return uids, nil
 }
 
-// Fetch downloads the next message body into a temp file (created from
-// tmpPattern) and returns its path, or "" when no messages remain. It fetches by
-// UID using BODY.PEEK[] so the \Seen flag is not changed.
+// UIDs returns a copy of the UIDs matched by the last Select.
+func (c *Client) UIDs() []int {
+	out := make([]int, len(c.uids))
+	copy(out, c.uids)
+	return out
+}
+
+// SearchAllUIDs returns every UID currently in the selected mailbox (UID SEARCH
+// ALL), used to prune stored state of messages that no longer exist.
+func (c *Client) SearchAllUIDs() ([]int, error) {
+	return c.uidSearch("ALL")
+}
+
+// Fetch downloads the next matched message body into a temp file and returns its
+// path, or "" when no messages remain. It is a convenience wrapper over FetchUID
+// that iterates the UIDs from the last Select.
 func (c *Client) Fetch(tmpPattern string) (string, error) {
 	if c.idx >= len(c.uids) {
 		return "", nil
 	}
 	uid := c.uids[c.idx]
 	c.idx++
+	return c.FetchUID(uid, tmpPattern)
+}
+
+// FetchUID downloads the message with the given UID into a temp file (created
+// from tmpPattern) and returns its path. It uses BODY.PEEK[] so the \Seen flag
+// is not changed, and records the UID as the Delete target.
+func (c *Client) FetchUID(uid int, tmpPattern string) (string, error) {
 	c.last = uid
 
 	tag := c.nextTag()
