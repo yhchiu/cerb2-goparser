@@ -133,9 +133,11 @@ func TestLoadIMAP(t *testing.T) {
 			<password value="secret" />
 			<mailbox value="Archive" />
 			<delete value="false" />
+			<search value="UNSEEN" />
 		</imap>
 		<imap>
 			<host value="imap2.example.com" />
+			<starttls value="true" />
 		</imap>
 	</configuration>`
 	cfg, err := Load(strings.NewReader(src), nil)
@@ -146,12 +148,13 @@ func TestLoadIMAP(t *testing.T) {
 		t.Fatalf("IMAP accounts = %d, want 2", len(cfg.IMAP))
 	}
 	a := cfg.IMAP[0]
-	if a.Host != "imap.example.com" || !a.TLS || a.Port != 993 || a.User != "bob" ||
-		a.Pass != "secret" || a.Mailbox != "Archive" || a.Delete {
+	if a.Host != "imap.example.com" || !a.TLS || a.STARTTLS || a.Port != 993 || a.User != "bob" ||
+		a.Pass != "secret" || a.Mailbox != "Archive" || a.Delete || a.Search != "UNSEEN" {
 		t.Errorf("imap[0] = %+v", a)
 	}
 	b := cfg.IMAP[1]
-	if b.Host != "imap2.example.com" || b.TLS || b.Port != 143 || b.Mailbox != "INBOX" || !b.Delete {
+	if b.Host != "imap2.example.com" || b.TLS || !b.STARTTLS || b.Port != 143 ||
+		b.Mailbox != "INBOX" || !b.Delete || b.Search != "ALL" {
 		t.Errorf("imap[1] defaults = %+v", b)
 	}
 }

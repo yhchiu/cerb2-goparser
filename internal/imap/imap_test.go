@@ -2,18 +2,74 @@ package imap
 
 import (
 	"bufio"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
-// startServer launches a one-shot fake IMAP server serving the given messages
-// (keyed by sequence number) for FETCH.
+// serveIMAP runs the fake-server command loop, serving messages (keyed by UID)
+// for FETCH. It understands the "UID" command prefix.
+func serveIMAP(w io.Writer, r *bufio.Reader, messages map[int]string) {
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		tag := fields[0]
+		cmd := strings.ToUpper(fields[1])
+		args := fields[2:]
+		if cmd == "UID" && len(fields) >= 3 {
+			cmd = strings.ToUpper(fields[2])
+			args = fields[3:]
+		}
+		switch cmd {
+		case "LOGIN":
+			io.WriteString(w, tag+" OK logged in\r\n")
+		case "SELECT":
+			io.WriteString(w, "* 2 EXISTS\r\n")
+			io.WriteString(w, "* OK [UIDVALIDITY 42] mailbox open\r\n")
+			io.WriteString(w, tag+" OK [READ-WRITE] SELECT completed\r\n")
+		case "SEARCH":
+			io.WriteString(w, "* SEARCH 1001 1002\r\n")
+			io.WriteString(w, tag+" OK SEARCH completed\r\n")
+		case "FETCH":
+			uid, _ := strconv.Atoi(args[0])
+			body := messages[uid]
+			fmt.Fprintf(w, "* 1 FETCH (UID %d BODY[] {%d}\r\n", uid, len(body))
+			io.WriteString(w, body)
+			io.WriteString(w, ")\r\n")
+			io.WriteString(w, tag+" OK FETCH completed\r\n")
+		case "STORE":
+			io.WriteString(w, tag+" OK STORE completed\r\n")
+		case "EXPUNGE":
+			io.WriteString(w, tag+" OK EXPUNGE completed\r\n")
+		case "LOGOUT":
+			io.WriteString(w, "* BYE\r\n")
+			io.WriteString(w, tag+" OK LOGOUT completed\r\n")
+			return
+		default:
+			io.WriteString(w, tag+" BAD unknown\r\n")
+		}
+	}
+}
+
 func startServer(t *testing.T, messages map[int]string) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -29,56 +85,58 @@ func startServer(t *testing.T, messages map[int]string) string {
 		defer conn.Close()
 		r := bufio.NewReader(conn)
 		io.WriteString(conn, "* OK IMAP ready\r\n")
-		for {
-			line, err := r.ReadString('\n')
-			if err != nil {
-				return
-			}
-			fields := strings.Fields(line)
-			if len(fields) < 2 {
-				continue
-			}
-			tag := fields[0]
-			switch strings.ToUpper(fields[1]) {
-			case "LOGIN":
-				io.WriteString(conn, tag+" OK logged in\r\n")
-			case "SELECT":
-				io.WriteString(conn, "* 2 EXISTS\r\n")
-				io.WriteString(conn, tag+" OK [READ-WRITE] SELECT completed\r\n")
-			case "SEARCH":
-				io.WriteString(conn, "* SEARCH 1 2\r\n")
-				io.WriteString(conn, tag+" OK SEARCH completed\r\n")
-			case "FETCH":
-				seq, _ := strconv.Atoi(fields[2])
-				body := messages[seq]
-				fmt.Fprintf(conn, "* %d FETCH (BODY[] {%d}\r\n", seq, len(body))
-				io.WriteString(conn, body)
-				io.WriteString(conn, ")\r\n")
-				io.WriteString(conn, tag+" OK FETCH completed\r\n")
-			case "STORE":
-				io.WriteString(conn, tag+" OK STORE completed\r\n")
-			case "EXPUNGE":
-				io.WriteString(conn, tag+" OK EXPUNGE completed\r\n")
-			case "LOGOUT":
-				io.WriteString(conn, "* BYE\r\n")
-				io.WriteString(conn, tag+" OK LOGOUT completed\r\n")
-				return
-			default:
-				io.WriteString(conn, tag+" BAD unknown\r\n")
-			}
-		}
+		serveIMAP(conn, r, messages)
 	}()
 	return ln.Addr().String()
 }
 
-func TestIMAPFlow(t *testing.T) {
-	msgs := map[int]string{
-		1: "Subject: One\r\n\r\nbody one\r\n",
-		2: "Subject: Two\r\n\r\n..dotline stays\r\nbody two\r\n",
+// startSTARTTLSServer answers the greeting and STARTTLS in plaintext, upgrades
+// to TLS with cert, then serves the IMAP session over TLS.
+func startSTARTTLSServer(t *testing.T, cert tls.Certificate, messages map[int]string) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	addr := startServer(t, msgs)
+	go func() {
+		defer ln.Close()
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		r := bufio.NewReader(conn)
+		io.WriteString(conn, "* OK ready\r\n")
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || strings.ToUpper(fields[1]) != "STARTTLS" {
+			return
+		}
+		io.WriteString(conn, fields[0]+" OK begin TLS\r\n")
+		tc := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}})
+		if err := tc.Handshake(); err != nil {
+			return
+		}
+		serveIMAP(tc, bufio.NewReader(tc), messages)
+	}()
+	return ln.Addr().String()
+}
+
+func dialFields(addr string) (string, int) {
 	host, portStr, _ := net.SplitHostPort(addr)
 	port, _ := strconv.Atoi(portStr)
+	return host, port
+}
+
+func TestIMAPFlow(t *testing.T) {
+	msgs := map[int]string{
+		1001: "Subject: One\r\n\r\nbody one\r\n",
+		1002: "Subject: Two\r\n\r\n..dotline stays\r\nbody two\r\n",
+	}
+	host, port := dialFields(startServer(t, msgs))
 
 	c, err := Dial(nil, host, port, 5, nil)
 	if err != nil {
@@ -87,34 +145,34 @@ func TestIMAPFlow(t *testing.T) {
 	if err := c.Login("u", "p"); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	count, err := c.Select("INBOX")
+	count, err := c.Select("INBOX", "ALL")
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
 	if count != 2 {
 		t.Fatalf("count = %d, want 2", count)
 	}
+	if c.UIDValidity() != 42 {
+		t.Errorf("UIDValidity = %d, want 42", c.UIDValidity())
+	}
 
 	pattern := filepath.Join(t.TempDir(), "cerbmail_XXXXXX")
-	for i := 1; i <= 2; i++ {
+	for _, uid := range []int{1001, 1002} {
 		fn, err := c.Fetch(pattern)
 		if err != nil {
-			t.Fatalf("Fetch %d: %v", i, err)
+			t.Fatalf("Fetch: %v", err)
 		}
 		data, err := os.ReadFile(fn)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(data) != msgs[i] {
-			t.Errorf("message %d = %q, want %q", i, data, msgs[i])
+		if string(data) != msgs[uid] {
+			t.Errorf("uid %d = %q, want %q", uid, data, msgs[uid])
 		}
 	}
-
-	// no more messages
 	if fn, _ := c.Fetch(pattern); fn != "" {
 		t.Errorf("expected no third message, got %q", fn)
 	}
-
 	if err := c.Delete(); err != nil {
 		t.Errorf("Delete: %v", err)
 	}
@@ -126,6 +184,39 @@ func TestIMAPFlow(t *testing.T) {
 	}
 }
 
+func TestIMAPStartTLS(t *testing.T) {
+	cert := selfSignedCert(t)
+	msgs := map[int]string{1001: "Subject: x\r\n\r\nsecure body\r\n"}
+	host, port := dialFields(startSTARTTLSServer(t, cert, msgs))
+
+	c, err := Dial(nil, host, port, 5, nil) // plaintext first
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+		t.Fatalf("StartTLS: %v", err)
+	}
+	if err := c.Login("u", "p"); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	count, err := c.Select("INBOX", "UNSEEN") // custom search criteria
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if count != 2 { // fake server always returns 1001 1002
+		t.Fatalf("count = %d, want 2", count)
+	}
+	fn, err := c.Fetch(filepath.Join(t.TempDir(), "cerbmail_XXXXXX"))
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	data, _ := os.ReadFile(fn)
+	if string(data) != msgs[1001] {
+		t.Errorf("fetched %q, want %q", data, msgs[1001])
+	}
+	_ = c.Logout()
+}
+
 func TestParseLiteral(t *testing.T) {
 	cases := []struct {
 		in    string
@@ -133,7 +224,7 @@ func TestParseLiteral(t *testing.T) {
 		isLit bool
 	}{
 		{"* 1 FETCH (BODY[] {26}\r\n", 26, true},
-		{"* 1 FETCH (BODY[] {26+}\r\n", 26, true},
+		{"* 1 FETCH (UID 5 BODY[] {26+}\r\n", 26, true},
 		{"A001 OK done\r\n", 0, false},
 		{"* SEARCH 1 2 3\r\n", 0, false},
 	}
@@ -143,4 +234,35 @@ func TestParseLiteral(t *testing.T) {
 			t.Errorf("parseLiteral(%q) = %d,%v want %d,%v", c.in, size, ok, c.size, c.isLit)
 		}
 	}
+}
+
+func TestParseUIDValidity(t *testing.T) {
+	if v, ok := parseUIDValidity("* OK [UIDVALIDITY 123] ready"); !ok || v != 123 {
+		t.Errorf("got %d,%v want 123,true", v, ok)
+	}
+	if _, ok := parseUIDValidity("* OK [READ-WRITE] selected"); ok {
+		t.Error("did not expect a UIDVALIDITY")
+	}
+}
+
+func selfSignedCert(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "127.0.0.1"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }

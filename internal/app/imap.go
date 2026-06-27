@@ -23,16 +23,26 @@ func runIMAP(cfg *config.Config, log *clog.Logger, poster Poster) int {
 			continue
 		}
 
-		var tlsConf *tls.Config
+		// implicit TLS connects over TLS; STARTTLS connects plaintext and
+		// upgrades. Both honor the ssl verification settings.
+		var dialTLS *tls.Config
 		if acct.TLS {
-			tlsConf = config.TLSConfig(cfg)
+			dialTLS = config.TLSConfig(cfg)
 		}
 
-		c, err := imap.Dial(log, acct.Host, acct.Port, cfg.POP3Timeout, tlsConf)
+		c, err := imap.Dial(log, acct.Host, acct.Port, cfg.POP3Timeout, dialTLS)
 		if err != nil {
 			log.Log(clog.Error, "IMAP: could not connect to %s:%d: %v", acct.Host, acct.Port, err)
 			rc = ExitSoftware
 			continue
+		}
+
+		if acct.STARTTLS {
+			if err := c.StartTLS(config.TLSConfig(cfg)); err != nil {
+				log.Log(clog.Error, "IMAP: STARTTLS failed: %v", err)
+				c.Close()
+				continue
+			}
 		}
 
 		if err := c.Login(acct.User, acct.Pass); err != nil {
@@ -41,7 +51,7 @@ func runIMAP(cfg *config.Config, log *clog.Logger, poster Poster) int {
 			continue
 		}
 
-		count, err := c.Select(acct.Mailbox)
+		count, err := c.Select(acct.Mailbox, acct.Search)
 		if err != nil {
 			log.Log(clog.Error, "IMAP: %v", err)
 			_ = c.Logout()

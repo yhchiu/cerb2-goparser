@@ -48,17 +48,23 @@ func startFakeIMAP(t *testing.T, messages map[int]string) string {
 				continue
 			}
 			tag := fields[0]
-			switch strings.ToUpper(fields[1]) {
+			cmd := strings.ToUpper(fields[1])
+			args := fields[2:]
+			if cmd == "UID" && len(fields) >= 3 {
+				cmd = strings.ToUpper(fields[2])
+				args = fields[3:]
+			}
+			switch cmd {
 			case "LOGIN":
 				io.WriteString(conn, tag+" OK ok\r\n")
 			case "SELECT":
-				io.WriteString(conn, "* 2 EXISTS\r\n"+tag+" OK ok\r\n")
+				io.WriteString(conn, "* 2 EXISTS\r\n* OK [UIDVALIDITY 1] ok\r\n"+tag+" OK ok\r\n")
 			case "SEARCH":
 				io.WriteString(conn, "* SEARCH 1 2\r\n"+tag+" OK ok\r\n")
 			case "FETCH":
-				seq, _ := strconv.Atoi(fields[2])
-				body := messages[seq]
-				fmt.Fprintf(conn, "* %d FETCH (BODY[] {%d}\r\n", seq, len(body))
+				uid, _ := strconv.Atoi(args[0])
+				body := messages[uid]
+				fmt.Fprintf(conn, "* 1 FETCH (UID %d BODY[] {%d}\r\n", uid, len(body))
 				io.WriteString(conn, body+")\r\n"+tag+" OK ok\r\n")
 			case "LOGOUT":
 				io.WriteString(conn, "* BYE\r\n"+tag+" OK ok\r\n")

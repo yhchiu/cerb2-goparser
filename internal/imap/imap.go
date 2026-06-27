@@ -1,7 +1,13 @@
 // Package imap is a minimal IMAP4rev1 client (RFC 3501) over net.Conn, with
-// optional implicit TLS. It supports the subset the parser needs: login, select
-// a mailbox, search for messages, fetch each message body to a temp file, mark
-// messages deleted, expunge, and logout.
+// optional implicit TLS or STARTTLS. It supports the subset the parser needs:
+// login, select a mailbox, UID SEARCH with a caller-supplied criteria, fetch
+// each message body to a temp file, mark messages deleted by UID, expunge, and
+// logout.
+//
+// The package is an abstraction boundary: the app depends only on the small
+// Client method set, so this hand-rolled implementation can be swapped for a
+// full library (e.g. github.com/emersion/go-imap) later without touching the
+// app, should OAuth2/SASL or richer IMAP features ever be required.
 package imap
 
 import (
@@ -20,14 +26,16 @@ import (
 
 // Client is a connected IMAP session.
 type Client struct {
-	conn    net.Conn
-	r       *bufio.Reader
-	timeout time.Duration
-	log     *clog.Logger
-	tag     int
-	msgs    []int // sequence numbers from SEARCH
-	idx     int   // Fetch cursor into msgs
-	last    int   // last fetched sequence number (Delete target)
+	conn        net.Conn
+	r           *bufio.Reader
+	timeout     time.Duration
+	log         *clog.Logger
+	host        string
+	tag         int
+	uids        []int  // message UIDs from UID SEARCH
+	idx         int    // Fetch cursor into uids
+	last        int    // last fetched UID (Delete/STORE target)
+	uidValidity uint32 // mailbox UIDVALIDITY reported by SELECT
 }
 
 // Dial connects to host:port. When tlsConf is non-nil the connection uses
@@ -55,7 +63,7 @@ func Dial(log *clog.Logger, host string, port, timeoutSec int, tlsConf *tls.Conf
 		return nil, err
 	}
 
-	c := &Client{conn: conn, r: bufio.NewReader(conn), timeout: timeout, log: log}
+	c := &Client{conn: conn, r: bufio.NewReader(conn), timeout: timeout, log: log, host: host}
 	line, err := c.readLine()
 	if err != nil {
 		c.Close()
@@ -110,22 +118,67 @@ func (c *Client) cmd(format string, args ...any) ([]string, error) {
 	}
 }
 
+// StartTLS upgrades a plaintext connection to TLS via the STARTTLS command. It
+// must be called after Dial (with a nil tlsConf) and before Login. As a guard
+// against a buffering/injection attack, it refuses to proceed if the server
+// sent anything after the STARTTLS reply but before the handshake.
+func (c *Client) StartTLS(tlsConf *tls.Config) error {
+	if _, err := c.cmd("STARTTLS"); err != nil {
+		return err
+	}
+	if c.r.Buffered() > 0 {
+		return fmt.Errorf("imap: unexpected data buffered after STARTTLS")
+	}
+	tc := &tls.Config{}
+	if tlsConf != nil {
+		tc = tlsConf.Clone()
+	}
+	if tc.ServerName == "" {
+		tc.ServerName = c.host
+	}
+	tlsConn := tls.Client(c.conn, tc)
+	_ = tlsConn.SetDeadline(time.Now().Add(c.timeout))
+	if err := tlsConn.Handshake(); err != nil {
+		return err
+	}
+	_ = tlsConn.SetDeadline(time.Time{})
+	c.conn = tlsConn
+	c.r = bufio.NewReader(tlsConn)
+	return nil
+}
+
 // Login authenticates with LOGIN.
 func (c *Client) Login(user, pass string) error {
 	_, err := c.cmd("LOGIN %s %s", quote(user), quote(pass))
 	return err
 }
 
-// Select opens a mailbox read-write and loads the sequence numbers of all
-// messages via SEARCH ALL, returning the message count.
-func (c *Client) Select(mailbox string) (int, error) {
+// UIDValidity returns the mailbox UIDVALIDITY reported by the last Select. It is
+// stable across sessions while the mailbox is not recreated, so callers may pair
+// it with fetched UIDs to recognize messages across runs.
+func (c *Client) UIDValidity() uint32 { return c.uidValidity }
+
+// Select opens a mailbox read-write, records its UIDVALIDITY, and loads the UIDs
+// of the messages matching criteria via UID SEARCH (criteria defaults to "ALL").
+// It returns the number of matching messages.
+func (c *Client) Select(mailbox, criteria string) (int, error) {
 	if mailbox == "" {
 		mailbox = "INBOX"
 	}
-	if _, err := c.cmd("SELECT %s", quote(mailbox)); err != nil {
+	if criteria == "" {
+		criteria = "ALL"
+	}
+	selResp, err := c.cmd("SELECT %s", quote(mailbox))
+	if err != nil {
 		return 0, err
 	}
-	untagged, err := c.cmd("SEARCH ALL")
+	for _, line := range selResp {
+		if v, ok := parseUIDValidity(line); ok {
+			c.uidValidity = v
+		}
+	}
+
+	untagged, err := c.cmd("UID SEARCH %s", criteria)
 	if err != nil {
 		return 0, err
 	}
@@ -134,27 +187,27 @@ func (c *Client) Select(mailbox string) (int, error) {
 		if len(f) >= 2 && f[0] == "*" && strings.EqualFold(f[1], "SEARCH") {
 			for _, num := range f[2:] {
 				if v, err := strconv.Atoi(num); err == nil {
-					c.msgs = append(c.msgs, v)
+					c.uids = append(c.uids, v)
 				}
 			}
 		}
 	}
-	return len(c.msgs), nil
+	return len(c.uids), nil
 }
 
 // Fetch downloads the next message body into a temp file (created from
-// tmpPattern) and returns its path, or "" when no messages remain. It uses
-// BODY.PEEK[] so the \Seen flag is not changed.
+// tmpPattern) and returns its path, or "" when no messages remain. It fetches by
+// UID using BODY.PEEK[] so the \Seen flag is not changed.
 func (c *Client) Fetch(tmpPattern string) (string, error) {
-	if c.idx >= len(c.msgs) {
+	if c.idx >= len(c.uids) {
 		return "", nil
 	}
-	seq := c.msgs[c.idx]
+	uid := c.uids[c.idx]
 	c.idx++
-	c.last = seq
+	c.last = uid
 
 	tag := c.nextTag()
-	if err := c.send(fmt.Sprintf("%s FETCH %d BODY.PEEK[]", tag, seq)); err != nil {
+	if err := c.send(fmt.Sprintf("%s UID FETCH %d BODY.PEEK[]", tag, uid)); err != nil {
 		return "", err
 	}
 
@@ -180,7 +233,7 @@ func (c *Client) Fetch(tmpPattern string) (string, error) {
 		if strings.HasPrefix(line, tag+" ") {
 			status := strings.TrimSpace(line[len(tag)+1:])
 			if !strings.HasPrefix(status, "OK") {
-				return "", fmt.Errorf("FETCH %d: %s", seq, status)
+				return "", fmt.Errorf("UID FETCH %d: %s", uid, status)
 			}
 			break
 		}
@@ -188,14 +241,13 @@ func (c *Client) Fetch(tmpPattern string) (string, error) {
 	return f.Name(), nil
 }
 
-// Delete marks the most recently fetched message \Deleted. Call Expunge once
-// after the fetch loop to actually remove flagged messages (expunging mid-loop
-// would renumber sequence numbers).
+// Delete marks the most recently fetched message \Deleted by UID. Call Expunge
+// once after the fetch loop to actually remove flagged messages.
 func (c *Client) Delete() error {
 	if c.last == 0 {
 		return nil
 	}
-	_, err := c.cmd(`STORE %d +FLAGS (\Deleted)`, c.last)
+	_, err := c.cmd(`UID STORE %d +FLAGS (\Deleted)`, c.last)
 	return err
 }
 
@@ -238,6 +290,26 @@ func parseLiteral(line string) (int64, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+// parseUIDValidity extracts the value of a "[UIDVALIDITY n]" response code from
+// a SELECT untagged line, if present.
+func parseUIDValidity(line string) (uint32, bool) {
+	const marker = "[UIDVALIDITY "
+	i := strings.Index(strings.ToUpper(line), marker)
+	if i < 0 {
+		return 0, false
+	}
+	rest := line[i+len(marker):]
+	j := strings.IndexByte(rest, ']')
+	if j < 0 {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(strings.TrimSpace(rest[:j]), 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(n), true
 }
 
 // quote returns s as an IMAP quoted string.

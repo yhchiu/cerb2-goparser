@@ -134,13 +134,17 @@
        ============================================================
        Repeat the <imap> block once per mailbox.
          host     : required (a block with no host is skipped)
-         tls      : "true" uses implicit TLS (recommended, e.g. port 993)
+         tls      : "true" uses implicit TLS (e.g. port 993)
+         starttls : "true" connects in plaintext then upgrades (e.g. port 143).
+                    Use either tls or starttls, not both.
          port     : defaults to 993 when tls is "true", otherwise 143
          user     : required to log in
          password : required to log in
          mailbox  : defaults to INBOX
+         search   : IMAP UID SEARCH criteria, defaults to ALL.
+                    Examples: UNSEEN ; SINCE 1-Jan-2024 ; FROM boss@example.com
          delete   : "false" leaves this account's mail on the server.
-                    Processed messages are marked \Deleted and expunged.
+                    Processed messages are marked \Deleted (by UID) and expunged.
 
   <imap>
     <host value="imap.example.com" />
@@ -149,6 +153,7 @@
     <user value="spam@example.com" />
     <password value="secret" />
     <mailbox value="INBOX" />
+    <search value="ALL" />
     <delete value="true" />
   </imap>
   -->

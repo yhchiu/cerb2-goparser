@@ -25,13 +25,15 @@ type POP3Account struct {
 
 // IMAPAccount is one <imap> mailbox to fetch from.
 type IMAPAccount struct {
-	Host    string
-	Port    int
-	User    string
-	Pass    string
-	Delete  bool
-	TLS     bool   // implicit TLS (e.g. port 993)
-	Mailbox string // defaults to INBOX
+	Host     string
+	Port     int
+	User     string
+	Pass     string
+	Delete   bool
+	TLS      bool   // implicit TLS (e.g. port 993)
+	STARTTLS bool   // upgrade a plaintext connection (e.g. port 143) via STARTTLS
+	Mailbox  string // defaults to INBOX
+	Search   string // UID SEARCH criteria; defaults to ALL
 }
 
 // Config holds the parsed configuration. Zero-value defaults are set by Load.
@@ -241,9 +243,12 @@ func Load(r io.Reader, log *clog.Logger) (*Config, error) {
 		if !ok {
 			continue
 		}
-		acct := IMAPAccount{Host: host, Delete: true, Mailbox: "INBOX"}
+		acct := IMAPAccount{Host: host, Delete: true, Mailbox: "INBOX", Search: "ALL"}
 		if v, ok := attr(n.Get("imap", "tls"), "value"); ok && v == "true" {
 			acct.TLS = true
+		}
+		if v, ok := attr(n.Get("imap", "starttls"), "value"); ok && v == "true" {
+			acct.STARTTLS = true
 		}
 		if v, ok := attr(n.Get("imap", "port"), "value"); ok {
 			acct.Port = atoi(v)
@@ -263,6 +268,9 @@ func Load(r io.Reader, log *clog.Logger) (*Config, error) {
 		}
 		if v, ok := attr(n.Get("imap", "mailbox"), "value"); ok && v != "" {
 			acct.Mailbox = v
+		}
+		if v, ok := attr(n.Get("imap", "search"), "value"); ok && v != "" {
+			acct.Search = v
 		}
 		cfg.IMAP = append(cfg.IMAP, acct)
 	}

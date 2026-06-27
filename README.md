@@ -81,7 +81,7 @@ Other recognised elements (all optional):
 | `ssl/capath@value` | CA directory for HTTPS | — |
 | `ssl/verify@value` | 0 = no verify, 1/2 = verify | full verify |
 | `pop3` (repeatable) | mailbox: `host`/`port`(110)/`user`/`password`/`delete` | — |
-| `imap` (repeatable) | mailbox: `host`/`port`(993 if `tls`, else 143)/`user`/`password`/`tls`/`mailbox`(INBOX)/`delete` | — |
+| `imap` (repeatable) | mailbox: `host`/`port`(993 if `tls`, else 143)/`user`/`password`/`tls`/`starttls`/`mailbox`(INBOX)/`search`(ALL)/`delete` | — |
 
 ## Architecture
 
@@ -138,6 +138,11 @@ CDATA-wrapped, and indentation is two spaces per level — all matching
   C (`<key>` vs `<xsp>`) are not reproduced; both config shapes above work.
 - Temp files for extracted parts are cleaned up after posting (the C left some
   behind).
-- **IMAP is a new addition** (the C only spoke POP3). Add `<imap>` blocks
-  (optional implicit TLS); processed messages are marked `\Deleted` and expunged.
-  The `max_pop3_messages` and `pop3_timeout` settings apply to IMAP as well.
+- **IMAP is a new addition** (the C only spoke POP3). Add `<imap>` blocks with
+  implicit TLS (`tls`) or `starttls`, a `search` criteria (IMAP `UID SEARCH`,
+  default `ALL`), and a `mailbox` (default `INBOX`). Messages are fetched and
+  marked `\Deleted` by UID, then expunged. The `max_pop3_messages` and
+  `pop3_timeout` settings apply to IMAP as well. The `internal/imap` package is a
+  hand-rolled client kept behind a small interface, so it can be swapped for a
+  full library (e.g. `emersion/go-imap`) later — for OAuth2/SASL or richer
+  features — without touching the app.
