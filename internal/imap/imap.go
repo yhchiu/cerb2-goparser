@@ -92,9 +92,30 @@ func (c *Client) readLine() (string, error) {
 	return c.r.ReadString('\n')
 }
 
+// consumeLiteral checks whether line ends in an IMAP literal marker ("{n}" or
+// the non-synchronizing "{n+}") and, if so, copies exactly n raw bytes from the
+// connection to dst (io.Discard to drop them) before returning true. The bytes
+// are copied verbatim, including any CR/LF or text that happens to resemble
+// protocol syntax, so a literal's payload is never reinterpreted as response
+// lines — which would otherwise desync the reader or let message content be
+// mistaken for a server reply.
+func (c *Client) consumeLiteral(line string, dst io.Writer) (bool, error) {
+	size, ok := parseLiteral(line)
+	if !ok {
+		return false, nil
+	}
+	_ = c.conn.SetReadDeadline(time.Now().Add(c.timeout))
+	_, err := io.CopyN(dst, c.r, size)
+	return true, err
+}
+
 // cmd sends a tagged command and returns the untagged response lines, erroring
-// on a NO/BAD completion. It is line-based and must not be used for responses
-// carrying literals (FETCH BODY[] is handled by Fetch).
+// on a NO/BAD completion. None of the commands issued through cmd (LOGIN,
+// STARTTLS, SELECT, UID SEARCH, UID STORE, EXPUNGE, LOGOUT) carry a literal in
+// a spec-compliant response, but consumeLiteral guards every line anyway so a
+// non-compliant or hostile server can't desync the reader or forge a tagged
+// completion inside a literal's payload. FETCH BODY[] is handled separately by
+// FetchUID, which keeps the literal data instead of discarding it.
 func (c *Client) cmd(format string, args ...any) ([]string, error) {
 	tag := c.nextTag()
 	command := fmt.Sprintf(format, args...)
@@ -105,6 +126,9 @@ func (c *Client) cmd(format string, args ...any) ([]string, error) {
 	for {
 		line, err := c.readLine()
 		if err != nil {
+			return untagged, err
+		}
+		if _, err := c.consumeLiteral(line, io.Discard); err != nil {
 			return untagged, err
 		}
 		if strings.HasPrefix(line, tag+" ") {
@@ -255,11 +279,9 @@ func (c *Client) FetchUID(uid int, tmpPattern string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if size, ok := parseLiteral(line); ok {
-			_ = c.conn.SetReadDeadline(time.Now().Add(c.timeout))
-			if _, err := io.CopyN(f, c.r, size); err != nil {
-				return "", err
-			}
+		if consumed, err := c.consumeLiteral(line, f); err != nil {
+			return "", err
+		} else if consumed {
 			continue
 		}
 		if strings.HasPrefix(line, tag+" ") {

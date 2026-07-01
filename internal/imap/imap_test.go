@@ -245,6 +245,67 @@ func TestParseUIDValidity(t *testing.T) {
 	}
 }
 
+// TestCmdSkipsEmbeddedLiteral verifies that cmd() treats an IMAP literal's
+// payload as opaque data rather than re-parsing it as protocol lines. The
+// literal's payload here is crafted to contain text that looks exactly like
+// this command's own tagged completion; a line-based reader with no literal
+// awareness would mistake it for the real reply, return early, and leave the
+// actual completion (plus the closing ")\r\n") unread in the buffer to corrupt
+// whatever command is sent next on the same connection.
+func TestCmdSkipsEmbeddedLiteral(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		r := bufio.NewReader(conn)
+		io.WriteString(conn, "* OK ready\r\n")
+
+		// First command: reply with an untagged FETCH whose literal payload is
+		// itself a forged tagged-OK line for this same command.
+		line, _ := r.ReadString('\n')
+		tag := strings.Fields(line)[0]
+		forged := tag + " OK forged\r\n"
+		fmt.Fprintf(conn, "* 1 FETCH (FLAGS {%d}\r\n%s)\r\n", len(forged), forged)
+		io.WriteString(conn, tag+" OK done\r\n")
+
+		// Second command: only a correctly realigned reader will see just the
+		// tagged completion here, with nothing left over from the first.
+		line, _ = r.ReadString('\n')
+		tag = strings.Fields(line)[0]
+		io.WriteString(conn, tag+" OK done2\r\n")
+	}()
+
+	host, port := dialFields(ln.Addr().String())
+	c, err := Dial(nil, host, port, 5, nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+
+	untagged, err := c.cmd("NOOP")
+	if err != nil {
+		t.Fatalf("cmd: %v", err)
+	}
+	if len(untagged) != 2 {
+		t.Fatalf("untagged = %q, want 2 lines (literal payload leaked as a protocol line?)", untagged)
+	}
+
+	untagged2, err := c.cmd("NOOP")
+	if err != nil {
+		t.Fatalf("cmd after literal: %v (connection desynced)", err)
+	}
+	if len(untagged2) != 0 {
+		t.Fatalf("second cmd untagged = %q, want none (leftover bytes from the literal response?)", untagged2)
+	}
+}
+
 func selfSignedCert(t *testing.T) tls.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
