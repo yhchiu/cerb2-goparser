@@ -13,6 +13,7 @@ package imap
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -175,6 +176,52 @@ func (c *Client) StartTLS(tlsConf *tls.Config) error {
 func (c *Client) Login(user, pass string) error {
 	_, err := c.cmd("LOGIN %s %s", quote(user), quote(pass))
 	return err
+}
+
+// AuthenticateXOAUTH2 authenticates with the SASL XOAUTH2 mechanism, used by
+// providers such as Microsoft 365 and Gmail that require an OAuth2 bearer token
+// instead of a password. The client response "user=<user>^Aauth=Bearer
+// <token>^A^A" (^A = 0x01) is base64-encoded and sent as a SASL initial response
+// (SASL-IR, which both targets support), so no extra round-trip is needed on
+// success.
+//
+// This cannot go through cmd because a SASL exchange uses the "+" continuation
+// response that cmd does not handle: on failure the server sends "+ <base64 error
+// challenge>" and, per the XOAUTH2 convention, the client must answer with an
+// empty line before the server emits the tagged NO. The read loop below mirrors
+// FetchUID's manual tag/send/read pattern and, like cmd, drains any literal so a
+// non-compliant server cannot desync the reader.
+func (c *Client) AuthenticateXOAUTH2(user, accessToken string) error {
+	authStr := "user=" + user + "\x01auth=Bearer " + accessToken + "\x01\x01"
+	ir := base64.StdEncoding.EncodeToString([]byte(authStr))
+
+	tag := c.nextTag()
+	if err := c.send(tag + " AUTHENTICATE XOAUTH2 " + ir); err != nil {
+		return err
+	}
+	for {
+		line, err := c.readLine()
+		if err != nil {
+			return err
+		}
+		if _, err := c.consumeLiteral(line, io.Discard); err != nil {
+			return err
+		}
+		switch {
+		case strings.HasPrefix(line, tag+" "):
+			status := strings.TrimSpace(line[len(tag)+1:])
+			if strings.HasPrefix(status, "OK") {
+				return nil
+			}
+			return fmt.Errorf("AUTHENTICATE XOAUTH2: %s", status)
+		case strings.HasPrefix(line, "+"):
+			// Error challenge: answer with an empty line to elicit the tagged NO.
+			if err := c.send(""); err != nil {
+				return err
+			}
+		}
+		// Any other untagged line is ignored.
+	}
 }
 
 // UIDValidity returns the mailbox UIDVALIDITY reported by the last Select. It is

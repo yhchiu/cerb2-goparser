@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"math/big"
@@ -21,8 +22,10 @@ import (
 )
 
 // serveIMAP runs the fake-server command loop, serving messages (keyed by UID)
-// for FETCH. It understands the "UID" command prefix.
-func serveIMAP(w io.Writer, r *bufio.Reader, messages map[int]string) {
+// for FETCH. It understands the "UID" command prefix. When authToken is non-empty
+// it enforces SASL XOAUTH2 AUTHENTICATE against that access token; when empty any
+// XOAUTH2 token is accepted.
+func serveIMAP(w io.Writer, r *bufio.Reader, messages map[int]string, authToken string) {
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
@@ -42,6 +45,24 @@ func serveIMAP(w io.Writer, r *bufio.Reader, messages map[int]string) {
 		switch cmd {
 		case "LOGIN":
 			io.WriteString(w, tag+" OK logged in\r\n")
+		case "AUTHENTICATE":
+			if len(args) < 1 || strings.ToUpper(args[0]) != "XOAUTH2" {
+				io.WriteString(w, tag+" NO unsupported mechanism\r\n")
+				continue
+			}
+			ir := ""
+			if len(args) >= 2 {
+				ir = args[1]
+			}
+			if xoauth2TokenOK(ir, authToken) {
+				io.WriteString(w, tag+" OK authenticated\r\n")
+				continue
+			}
+			// XOAUTH2 failure handshake: a base64 error challenge, then the client
+			// sends an empty line, then the tagged NO.
+			io.WriteString(w, "+ "+base64.StdEncoding.EncodeToString([]byte(`{"status":"401"}`))+"\r\n")
+			r.ReadString('\n') // consume the client's empty response
+			io.WriteString(w, tag+" NO AUTHENTICATE failed\r\n")
 		case "SELECT":
 			io.WriteString(w, "* 2 EXISTS\r\n")
 			io.WriteString(w, "* OK [UIDVALIDITY 42] mailbox open\r\n")
@@ -70,7 +91,30 @@ func serveIMAP(w io.Writer, r *bufio.Reader, messages map[int]string) {
 	}
 }
 
-func startServer(t *testing.T, messages map[int]string) string {
+// xoauth2TokenOK decodes a base64 XOAUTH2 initial response and reports whether it
+// carries the wanted bearer token. An empty wanted token accepts anything.
+func xoauth2TokenOK(ir, wanted string) bool {
+	if wanted == "" {
+		return true
+	}
+	decoded, err := base64.StdEncoding.DecodeString(ir)
+	if err != nil {
+		return false
+	}
+	s := string(decoded)
+	const marker = "auth=Bearer "
+	i := strings.Index(s, marker)
+	if i < 0 {
+		return false
+	}
+	tok := s[i+len(marker):]
+	if j := strings.IndexByte(tok, '\x01'); j >= 0 {
+		tok = tok[:j]
+	}
+	return tok == wanted
+}
+
+func startServer(t *testing.T, messages map[int]string, authToken string) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -85,14 +129,14 @@ func startServer(t *testing.T, messages map[int]string) string {
 		defer conn.Close()
 		r := bufio.NewReader(conn)
 		io.WriteString(conn, "* OK IMAP ready\r\n")
-		serveIMAP(conn, r, messages)
+		serveIMAP(conn, r, messages, authToken)
 	}()
 	return ln.Addr().String()
 }
 
 // startSTARTTLSServer answers the greeting and STARTTLS in plaintext, upgrades
 // to TLS with cert, then serves the IMAP session over TLS.
-func startSTARTTLSServer(t *testing.T, cert tls.Certificate, messages map[int]string) string {
+func startSTARTTLSServer(t *testing.T, cert tls.Certificate, messages map[int]string, authToken string) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -120,7 +164,7 @@ func startSTARTTLSServer(t *testing.T, cert tls.Certificate, messages map[int]st
 		if err := tc.Handshake(); err != nil {
 			return
 		}
-		serveIMAP(tc, bufio.NewReader(tc), messages)
+		serveIMAP(tc, bufio.NewReader(tc), messages, authToken)
 	}()
 	return ln.Addr().String()
 }
@@ -136,7 +180,7 @@ func TestIMAPFlow(t *testing.T) {
 		1001: "Subject: One\r\n\r\nbody one\r\n",
 		1002: "Subject: Two\r\n\r\n..dotline stays\r\nbody two\r\n",
 	}
-	host, port := dialFields(startServer(t, msgs))
+	host, port := dialFields(startServer(t, msgs, ""))
 
 	c, err := Dial(nil, host, port, 5, nil)
 	if err != nil {
@@ -187,7 +231,7 @@ func TestIMAPFlow(t *testing.T) {
 func TestIMAPStartTLS(t *testing.T) {
 	cert := selfSignedCert(t)
 	msgs := map[int]string{1001: "Subject: x\r\n\r\nsecure body\r\n"}
-	host, port := dialFields(startSTARTTLSServer(t, cert, msgs))
+	host, port := dialFields(startSTARTTLSServer(t, cert, msgs, ""))
 
 	c, err := Dial(nil, host, port, 5, nil) // plaintext first
 	if err != nil {
@@ -215,6 +259,57 @@ func TestIMAPStartTLS(t *testing.T) {
 		t.Errorf("fetched %q, want %q", data, msgs[1001])
 	}
 	_ = c.Logout()
+}
+
+func TestAuthenticateXOAUTH2(t *testing.T) {
+	const token = "ya29.the-access-token"
+	msgs := map[int]string{1001: "Subject: x\r\n\r\nbody\r\n"}
+	host, port := dialFields(startServer(t, msgs, token))
+
+	c, err := Dial(nil, host, port, 5, nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	if err := c.AuthenticateXOAUTH2("user@example.com", token); err != nil {
+		t.Fatalf("AuthenticateXOAUTH2: %v", err)
+	}
+	// The session must be usable after auth: SELECT then FETCH.
+	count, err := c.Select("INBOX", "ALL")
+	if err != nil {
+		t.Fatalf("Select after auth: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
+	}
+	fn, err := c.Fetch(filepath.Join(t.TempDir(), "cerbmail_XXXXXX"))
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if data, _ := os.ReadFile(fn); string(data) != msgs[1001] {
+		t.Errorf("fetched %q, want %q", data, msgs[1001])
+	}
+	_ = c.Logout()
+}
+
+func TestAuthenticateXOAUTH2Failure(t *testing.T) {
+	host, port := dialFields(startServer(t, nil, "correct-token"))
+
+	c, err := Dial(nil, host, port, 5, nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	err = c.AuthenticateXOAUTH2("user@example.com", "wrong-token")
+	if err == nil {
+		t.Fatal("expected auth failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "AUTHENTICATE XOAUTH2") {
+		t.Errorf("error = %q, want it to mention AUTHENTICATE XOAUTH2", err)
+	}
+	// After the "+" challenge / empty-line / NO exchange the reader must still be
+	// aligned, so a follow-up command works on the same connection.
+	if err := c.Logout(); err != nil {
+		t.Errorf("Logout after failed auth: %v (connection desynced?)", err)
+	}
 }
 
 func TestParseLiteral(t *testing.T) {
