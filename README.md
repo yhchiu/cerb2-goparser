@@ -82,7 +82,58 @@ Other recognised elements (all optional):
 | `ssl/capath@value` | CA directory for HTTPS | — |
 | `ssl/verify@value` | 0 = no verify, 1/2 = verify | full verify |
 | `pop3` (repeatable) | mailbox: `host`/`port`(110)/`user`/`password`/`delete` | — |
-| `imap` (repeatable) | mailbox: `host`/`port`(993 if `tls`, else 143)/`user`/`password`/`tls`/`starttls`/`mailbox`(INBOX)/`search`(ALL)/`delete` | — |
+| `imap` (repeatable) | mailbox: `host`/`port`(993 if `tls`, else 143)/`user`/`password`/`auth`(login)/`tls`/`starttls`/`mailbox`(INBOX)/`search`(ALL)/`delete` | — |
+| `imap` OAuth2 (when `auth="xoauth2"`) | `oauth_client_id`/`oauth_client_secret`/`oauth_refresh_token`/`oauth_tenant`/`oauth_scope`/`oauth_token_url`/`oauth_token_cache` — see [Microsoft 365](#microsoft-365-oauth2--xoauth2) | — |
+
+### Microsoft 365 (OAuth2 / XOAUTH2)
+
+Microsoft 365 (Exchange Online) has disabled Basic Auth for IMAP, so a mailbox is
+reached with an OAuth2 bearer token via the SASL **XOAUTH2** mechanism rather than a
+password. Set `<auth value="xoauth2"/>` on the `<imap>` block and supply the OAuth2
+settings; on each run the parser mints a short-lived access token from a refresh
+token and authenticates with it (no `<password>` is used).
+
+**One-time setup**
+
+1. Register an app in the Azure portal (Entra ID → **App registrations**). Note its
+   **Application (client) ID** and **Directory (tenant) ID**.
+2. Under **Certificates & secrets**, create a **client secret** (or use a public
+   client and omit the secret).
+3. Under **API permissions**, add the **delegated** Office 365 Exchange Online
+   permission `IMAP.AccessAsUser.All` plus `offline_access` (so the token endpoint
+   returns a refresh token), and grant admin consent.
+4. Make sure IMAP is enabled for the target mailbox (Microsoft 365 admin center →
+   the user → **Mail** → **Manage email apps** → IMAP).
+5. Obtain an initial **refresh token** once, interactively, by running the OAuth2
+   authorization-code flow for that mailbox: open the tenant `/authorize` URL in a
+   browser, sign in as the mailbox user to consent, then exchange the returned
+   `code` at the `/token` endpoint for a refresh token. This bootstrap is a manual
+   step (a bundled helper command may be added later).
+
+**Config keys** (a full block is in `config.xml.example`):
+
+| key | meaning |
+|-----|---------|
+| `auth` | `xoauth2` selects the token flow (no `password`) |
+| `user` | the mailbox address (UPN) |
+| `oauth_tenant` | tenant id or domain (or `common`); builds the default token URL |
+| `oauth_client_id` | Azure app (client) id |
+| `oauth_client_secret` | client secret (omit for a public app) |
+| `oauth_refresh_token` | the bootstrap refresh token obtained above |
+| `oauth_token_cache` | writable path caching the rotated refresh + access token (recommended) |
+| `oauth_scope` | optional; defaults to `https://outlook.office365.com/IMAP.AccessAsUser.All offline_access` |
+| `oauth_token_url` | optional; defaults to `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token` |
+
+Set `oauth_token_cache` to a writable path: Azure **rotates the refresh token on
+every refresh**, and the cache persists the newest one so an unattended parser keeps
+working past the bootstrap token's sliding expiry window. Without a cache the same
+bootstrap token is reused every run and eventually stops working. The cache holds
+secrets, so protect it like the config file. The token request reuses the `ssl`
+settings (`cainfo`/`capath`/`verify`).
+
+The same XOAUTH2 mechanism works for other providers such as Gmail given an
+appropriate `oauth_token_url` and `oauth_scope`; only the Microsoft 365 defaults are
+built in.
 
 ## Architecture
 
@@ -96,7 +147,8 @@ only the application-specific logic is ported.
 | `cxml` | `internal/xmltree` (custom DOM + wire-exact serializer) |
 | `cmime` | `internal/mimeparse` (the core parser) |
 | `cpop3` | `internal/pop3` |
-| (new) IMAP support | `internal/imap` (RFC 3501, optional implicit TLS) |
+| (new) IMAP support | `internal/imap` (RFC 3501, implicit TLS/STARTTLS, LOGIN + SASL XOAUTH2) |
+| (new) OAuth2 tokens | `internal/oauth` (hand-rolled refresh-token grant for XOAUTH2) |
 | `ccrypt/rsa` + `cer_key_info` | `internal/crypt` (Blowfish + key decode) |
 | `cer_curl_*`, `cer_add_sub_files` | `internal/poster` (`net/http` + `mime/multipart`) |
 | `cer_load_config` | `internal/config` |
@@ -146,7 +198,9 @@ CDATA-wrapped, and indentation is two spaces per level — all matching
   `pop3_timeout` settings apply to IMAP as well. Set `global/imap_state` to a
   file path to enable **cross-session de-duplication**: processed UIDs are
   remembered per mailbox (keyed by `UIDVALIDITY`) and skipped on later runs, most
-  useful with `<delete value="false"/>`. The `internal/imap` package is a
-  hand-rolled client kept behind a small interface, so it can be swapped for a
-  full library (e.g. `emersion/go-imap`) later — for OAuth2/SASL or richer
-  features — without touching the app.
+  useful with `<delete value="false"/>`. OAuth2 is supported via SASL **XOAUTH2**
+  for providers that require it, such as Microsoft 365 — see
+  [Microsoft 365 (OAuth2 / XOAUTH2)](#microsoft-365-oauth2--xoauth2). The
+  `internal/imap` package is a hand-rolled client kept behind a small interface, so
+  it can still be swapped for a full library (e.g. `emersion/go-imap`) later for
+  richer features without touching the app.
