@@ -159,6 +159,67 @@ func TestLoadIMAP(t *testing.T) {
 	}
 }
 
+func TestLoadIMAPXOAUTH2(t *testing.T) {
+	// A Microsoft 365 account: explicit token URL/scope are left unset so the
+	// tenant-derived defaults apply.
+	src := `<configuration>
+		<imap>
+			<host value="outlook.office365.com" />
+			<tls value="true" />
+			<user value="spam@contoso.com" />
+			<auth value="XOAUTH2" />
+			<oauth_tenant value="contoso.onmicrosoft.com" />
+			<oauth_client_id value="app-id" />
+			<oauth_client_secret value="app-secret" />
+			<oauth_refresh_token value="0.ABootstrap" />
+			<oauth_token_cache value="/var/lib/cerberus/token.json" />
+		</imap>
+		<imap>
+			<host value="imap.example.com" />
+			<tls value="true" />
+			<user value="bob" />
+			<auth value="xoauth2" />
+			<oauth_client_id value="id2" />
+			<oauth_refresh_token value="rt2" />
+			<oauth_scope value="custom scope" />
+			<oauth_token_url value="https://sts.example.com/token" />
+		</imap>
+	</configuration>`
+	cfg, err := Load(strings.NewReader(src), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.IMAP) != 2 {
+		t.Fatalf("IMAP accounts = %d, want 2", len(cfg.IMAP))
+	}
+
+	a := cfg.IMAP[0]
+	if a.AuthMech != "xoauth2" { // normalized to lower case
+		t.Errorf("AuthMech = %q, want xoauth2", a.AuthMech)
+	}
+	if a.OAuthClientID != "app-id" || a.OAuthClientSecret != "app-secret" || a.OAuthRefreshToken != "0.ABootstrap" {
+		t.Errorf("oauth creds = %+v", a)
+	}
+	if a.OAuthTokenCache != "/var/lib/cerberus/token.json" {
+		t.Errorf("OAuthTokenCache = %q", a.OAuthTokenCache)
+	}
+	wantURL := "https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/token"
+	if a.OAuthTokenURL != wantURL {
+		t.Errorf("OAuthTokenURL = %q, want %q", a.OAuthTokenURL, wantURL)
+	}
+	if a.OAuthScope != defaultM365Scope {
+		t.Errorf("OAuthScope = %q, want default %q", a.OAuthScope, defaultM365Scope)
+	}
+
+	b := cfg.IMAP[1]
+	if b.OAuthScope != "custom scope" {
+		t.Errorf("explicit scope overridden: %q", b.OAuthScope)
+	}
+	if b.OAuthTokenURL != "https://sts.example.com/token" {
+		t.Errorf("explicit token URL overridden: %q", b.OAuthTokenURL)
+	}
+}
+
 func TestLoadIMAPState(t *testing.T) {
 	src := `<configuration><global><imap_state value="/var/lib/cerberus/imap.json"/></global></configuration>`
 	cfg, err := Load(strings.NewReader(src), nil)

@@ -166,4 +166,44 @@
   </imap>
   -->
 
+  <!-- ============================================================
+       IMAP with OAuth2 / XOAUTH2  (Microsoft 365 / Exchange Online)
+       ============================================================
+       Microsoft 365 has disabled Basic Auth for IMAP, so the mailbox is
+       reached with an OAuth2 bearer token via the SASL XOAUTH2 mechanism
+       instead of a password. Register an Azure AD app, grant it the
+       delegated IMAP.AccessAsUser.All + offline_access permissions, and
+       obtain an initial refresh token once (see README). Then:
+
+         auth                : "xoauth2" selects the token flow (no password)
+         user                : the mailbox address (UPN)
+         oauth_tenant        : Azure tenant id or domain (or "common").
+                               Used to build the default token URL.
+         oauth_client_id     : Azure app (client) id
+         oauth_client_secret : Azure app client secret (omit for a public app)
+         oauth_refresh_token : the bootstrap refresh token obtained once
+         oauth_token_cache   : writable path where the rotated refresh token
+                               and access token are cached between runs.
+                               Recommended: Azure rotates the refresh token
+                               on each refresh, and this keeps it current.
+         oauth_scope         : optional; defaults to
+                               "https://outlook.office365.com/IMAP.AccessAsUser.All offline_access"
+         oauth_token_url     : optional; defaults to
+                               "https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token"
+
+  <imap>
+    <host value="outlook.office365.com" />
+    <tls value="true" />
+    <user value="spam@contoso.com" />
+    <auth value="xoauth2" />
+    <oauth_tenant value="contoso.onmicrosoft.com" />
+    <oauth_client_id value="00000000-0000-0000-0000-000000000000" />
+    <oauth_client_secret value="your-client-secret" />
+    <oauth_refresh_token value="0.AXkA...bootstrap-refresh-token" />
+    <oauth_token_cache value="/var/lib/cerberus/imap-token.json" />
+    <mailbox value="INBOX" />
+    <delete value="false" />
+  </imap>
+  -->
+
 </configuration>

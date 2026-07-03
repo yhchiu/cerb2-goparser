@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"cerb2-goparser/internal/clog"
 	"cerb2-goparser/internal/xmltree"
@@ -34,7 +35,26 @@ type IMAPAccount struct {
 	STARTTLS bool   // upgrade a plaintext connection (e.g. port 143) via STARTTLS
 	Mailbox  string // defaults to INBOX
 	Search   string // UID SEARCH criteria; defaults to ALL
+
+	// AuthMech selects the authentication method: "" or "login" uses plaintext
+	// LOGIN with Pass; "xoauth2" uses the SASL XOAUTH2 mechanism with an OAuth2
+	// access token minted from the OAuth* fields below (required by Microsoft 365
+	// and Gmail, which have disabled Basic Auth for IMAP).
+	AuthMech string
+
+	// OAuth2 settings, used when AuthMech is "xoauth2".
+	OAuthClientID     string
+	OAuthClientSecret string // empty for public clients
+	OAuthRefreshToken string // bootstrap refresh token (obtained once, out of band)
+	OAuthTenant       string // Microsoft tenant id/domain (or "common"); builds the default token URL
+	OAuthScope        string // space-separated scopes; defaults to the M365 IMAP scope
+	OAuthTokenURL     string // token endpoint; defaults to the M365 endpoint for the tenant
+	OAuthTokenCache   string // optional path to persist the rotated refresh + access token
 }
+
+// defaultM365Scope is the delegated scope for IMAP access to Exchange Online,
+// plus offline_access so the token endpoint returns a (rotating) refresh token.
+const defaultM365Scope = "https://outlook.office365.com/IMAP.AccessAsUser.All offline_access"
 
 // Config holds the parsed configuration. Zero-value defaults are set by Load.
 type Config struct {
@@ -278,6 +298,42 @@ func Load(r io.Reader, log *clog.Logger) (*Config, error) {
 		}
 		if v, ok := attr(n.Get("imap", "search"), "value"); ok && v != "" {
 			acct.Search = v
+		}
+		if v, ok := attr(n.Get("imap", "auth"), "value"); ok {
+			acct.AuthMech = strings.ToLower(v)
+		}
+		if v, ok := attr(n.Get("imap", "oauth_client_id"), "value"); ok {
+			acct.OAuthClientID = v
+		}
+		if v, ok := attr(n.Get("imap", "oauth_client_secret"), "value"); ok {
+			acct.OAuthClientSecret = v
+		}
+		if v, ok := attr(n.Get("imap", "oauth_refresh_token"), "value"); ok {
+			acct.OAuthRefreshToken = v
+		}
+		if v, ok := attr(n.Get("imap", "oauth_tenant"), "value"); ok {
+			acct.OAuthTenant = v
+		}
+		if v, ok := attr(n.Get("imap", "oauth_scope"), "value"); ok {
+			acct.OAuthScope = v
+		}
+		if v, ok := attr(n.Get("imap", "oauth_token_url"), "value"); ok {
+			acct.OAuthTokenURL = v
+		}
+		if v, ok := attr(n.Get("imap", "oauth_token_cache"), "value"); ok {
+			acct.OAuthTokenCache = v
+		}
+		if acct.AuthMech == "xoauth2" {
+			if acct.OAuthScope == "" {
+				acct.OAuthScope = defaultM365Scope
+			}
+			if acct.OAuthTokenURL == "" {
+				tenant := acct.OAuthTenant
+				if tenant == "" {
+					tenant = "common"
+				}
+				acct.OAuthTokenURL = fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", tenant)
+			}
 		}
 		cfg.IMAP = append(cfg.IMAP, acct)
 	}
