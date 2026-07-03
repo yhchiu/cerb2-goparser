@@ -3,12 +3,14 @@ package app
 import (
 	"crypto/tls"
 	"fmt"
+	"net/http"
 	"os"
 
 	"cerb2-goparser/internal/clog"
 	"cerb2-goparser/internal/config"
 	"cerb2-goparser/internal/imap"
 	"cerb2-goparser/internal/imapstate"
+	"cerb2-goparser/internal/oauth"
 )
 
 // runIMAP fetches messages from each configured IMAP account and processes them,
@@ -49,8 +51,17 @@ func runIMAP(cfg *config.Config, log *clog.Logger, poster Poster) int {
 // runIMAPAccount processes one account and returns false if anything failed.
 func runIMAPAccount(cfg *config.Config, acct config.IMAPAccount, state *imapstate.State, log *clog.Logger, poster Poster) (ok bool) {
 	ok = true
-	if acct.User == "" || acct.Pass == "" {
-		log.Log(clog.Error, "IMAP: User or Password was empty, skipping")
+	if acct.User == "" {
+		log.Log(clog.Error, "IMAP: User was empty, skipping")
+		return false
+	}
+	if acct.AuthMech == "xoauth2" {
+		if acct.OAuthClientID == "" || acct.OAuthRefreshToken == "" {
+			log.Log(clog.Error, "IMAP: xoauth2 requires oauth_client_id and oauth_refresh_token, skipping")
+			return false
+		}
+	} else if acct.Pass == "" {
+		log.Log(clog.Error, "IMAP: Password was empty, skipping")
 		return false
 	}
 
@@ -73,7 +84,7 @@ func runIMAPAccount(cfg *config.Config, acct config.IMAPAccount, state *imapstat
 			return false
 		}
 	}
-	if err := c.Login(acct.User, acct.Pass); err != nil {
+	if err := authenticate(cfg, acct, c, log); err != nil {
 		log.Log(clog.Error, "IMAP: %v", err)
 		return false
 	}
@@ -158,6 +169,31 @@ func runIMAPAccount(cfg *config.Config, acct config.IMAPAccount, state *imapstat
 		state.Put(key, c.UIDValidity(), newProcessed)
 	}
 	return ok
+}
+
+// authenticate logs the client in with the account's chosen mechanism: plaintext
+// LOGIN, or SASL XOAUTH2 with an OAuth2 access token minted from the refresh
+// token (required by Microsoft 365). The token request reuses the config's TLS
+// settings, matching the HTTP poster.
+func authenticate(cfg *config.Config, acct config.IMAPAccount, c *imap.Client, log *clog.Logger) error {
+	if acct.AuthMech != "xoauth2" {
+		return c.Login(acct.User, acct.Pass)
+	}
+	ts := &oauth.RefreshTokenSource{
+		TokenURL:     acct.OAuthTokenURL,
+		ClientID:     acct.OAuthClientID,
+		ClientSecret: acct.OAuthClientSecret,
+		RefreshToken: acct.OAuthRefreshToken,
+		Scope:        acct.OAuthScope,
+		CachePath:    acct.OAuthTokenCache,
+		HTTPClient:   &http.Client{Transport: &http.Transport{TLSClientConfig: config.TLSConfig(cfg)}},
+	}
+	tok, err := ts.Token()
+	if err != nil {
+		return err
+	}
+	log.Log(clog.Debug, "IMAP: authenticating %s via XOAUTH2", acct.User)
+	return c.AuthenticateXOAUTH2(acct.User, tok)
 }
 
 func stateKey(a config.IMAPAccount) string {
